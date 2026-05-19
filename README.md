@@ -20,7 +20,7 @@ mkdir -p ~/.claude/skills/codex-image-gen
 
 # 2. 下载 SKILL.md
 curl -o ~/.claude/skills/codex-image-gen/SKILL.md \
-  https://raw.githubusercontent.com/YOUR_USERNAME/claude-skills/main/skills/codex-image-gen/SKILL.md
+  https://raw.githubusercontent.com/finyorke/claude-skills/main/skills/codex-image-gen/SKILL.md
 
 # 3. 重启 Claude Code 对话即可使用
 ```
@@ -29,7 +29,7 @@ curl -o ~/.claude/skills/codex-image-gen/SKILL.md \
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/YOUR_USERNAME/claude-skills.git /tmp/claude-skills
+git clone https://github.com/finyorke/claude-skills.git /tmp/claude-skills
 
 # 2. 复制需要的 skill
 cp -r /tmp/claude-skills/skills/codex-image-gen ~/.claude/skills/
@@ -66,7 +66,7 @@ Claude: [生成 cyberpunk-city.png 到当前目录]
 # 拉取最新版本
 cd ~/.claude/skills/codex-image-gen
 curl -o SKILL.md \
-  https://raw.githubusercontent.com/YOUR_USERNAME/claude-skills/main/skills/codex-image-gen/SKILL.md
+  https://raw.githubusercontent.com/finyorke/claude-skills/main/skills/codex-image-gen/SKILL.md
 ```
 
 ## 📄 License
