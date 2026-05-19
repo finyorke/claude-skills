@@ -72,22 +72,33 @@ When in doubt, prefer being explicit about the save path inside the prompt strin
 
 **CRITICAL: Pass the user's prompt EXACTLY as they wrote it. DO NOT modify, expand, or "improve" their creative description.**
 
-Only add the save location if missing:
+Only handle the filename:
 
-- If the user gave a path/filename, use their EXACT prompt unchanged
-- If the user gave no path/filename, append only: ", 命名为 <filename>" where filename is simple like `image.png`
-
+- If the user specified a path/filename → use their EXACT prompt unchanged
+- If the user didn't specify a filename → append ONLY: ", 命名为 <filename>.png"
+  - The filename should be a simple 1-3 word description based on the main subject
+  - Use English for English prompts, Chinese pinyin or English for Chinese prompts
+  
 Examples:
 - User: "帮我懒羊羊在青青草原上吃饭的图片"
-  → Pass: "帮我懒羊羊在青青草原上吃饭的图片, 命名为 lazy-goat.png"
+  → Pass: "帮我懒羊羊在青青草原上吃饭的图片, 命名为 lazy-sheep.png"
   
 - User: "a cat sitting on a chair"  
-  → Pass: "a cat sitting on a chair, save as cat.png"
+  → Pass: "a cat sitting on a chair, save as cat-chair.png"
 
 - User: "画一个苹果, 保存为 apple.png"
   → Pass: "画一个苹果, 保存为 apple.png" (unchanged - already has filename)
 
-**NEVER add details like "卡通风格", "色彩鲜艳", character descriptions, or ANY creative modifications. The user knows what they want - respect their exact words.**
+- User: "生成赛博朋克城市"
+  → Pass: "生成赛博朋克城市, 命名为 cyberpunk-city.png"
+
+**NEVER add creative details like:**
+- ❌ "卡通风格", "色彩鲜艳", "高清", "细节丰富"
+- ❌ Character descriptions not in the original prompt
+- ❌ Scene details not in the original prompt
+- ❌ ANY creative modifications or "improvements"
+
+**The user's exact words are sacred - only add the filename if missing!**
 
 ## Output directory safety
 
