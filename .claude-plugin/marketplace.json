@@ -1,0 +1,13 @@
+{
+  "name": "fun-plugins",
+  "owner": {
+    "name": "finyorke"
+  },
+  "plugins": [
+    {
+      "name": "codex-image-gen",
+      "source": "./codex-image-gen",
+      "description": "用 codex CLI 生成图片 - 支持中英文触发词"
+    }
+  ]
+}

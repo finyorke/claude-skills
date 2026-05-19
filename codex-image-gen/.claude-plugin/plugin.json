@@ -1,0 +1,6 @@
+{
+  "name": "codex-image-gen",
+  "version": "1.0.0",
+  "description": "Generate images via the external codex CLI",
+  "author": "finyorke"
+}

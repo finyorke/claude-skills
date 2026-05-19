@@ -1,78 +1,93 @@
-# Claude Skills Collection
+# Claude Code Plugin Marketplace
 
-个人 Claude Code Skills 集合，用于扩展 Claude 的功能。
+这是一个 Claude Code Plugin 市场，提供各种实用的 plugins。
 
-## 🎯 Skills 列表
+## 🚀 快速安装
+
+在 Claude Code 中运行：
+
+```bash
+# 1. 添加 marketplace
+/plugin marketplace add finyorke/claude-skills
+
+# 2. 安装 plugin
+/plugin install codex-image-gen@fun-plugins
+```
+
+## 📦 Available Plugins
 
 ### codex-image-gen
-通过外部 `codex` CLI 生成图片的 skill。
+通过外部 `codex` CLI 生成图片的插件。
 
-**功能**：让 Claude 能够直接生成图片文件到本地
-**触发词**：生成图片、画一张、生图、generate an image 等
+- **功能**：让 Claude 直接生成图片文件
+- **触发词**：
+  - 中文：生成图片、画一张、生图、出一张图、做一张图、渲染一张、来张图
+  - 英文：generate an image, draw a picture, make me a picture, render an image, create an image
 
-## 📦 安装方法
-
-### 方法 1：直接下载（推荐）
-
-```bash
-# 1. 创建 skill 目录
-mkdir -p ~/.claude/skills/codex-image-gen
-
-# 2. 下载 SKILL.md
-curl -o ~/.claude/skills/codex-image-gen/SKILL.md \
-  https://raw.githubusercontent.com/finyorke/claude-skills/main/skills/codex-image-gen/SKILL.md
-
-# 3. 重启 Claude Code 对话即可使用
-```
-
-### 方法 2：克隆整个仓库
-
-```bash
-# 1. 克隆仓库
-git clone https://github.com/finyorke/claude-skills.git /tmp/claude-skills
-
-# 2. 复制需要的 skill
-cp -r /tmp/claude-skills/skills/codex-image-gen ~/.claude/skills/
-
-# 3. 重启 Claude Code 对话
-```
-
-## 🔧 前置要求
+## 📋 前置要求
 
 ### codex-image-gen
 需要先安装 [codex CLI](https://github.com/openai/codex)：
 
 ```bash
-# macOS/Linux
+# 安装 codex（如果还没装）
 npm install -g @openai/codex
 
 # 验证安装
 which codex
 ```
 
-## 📝 使用示例
+## 💡 使用示例
 
 ```
 用户: 帮我生成一张可爱的猫咪图片
-Claude: [调用 codex-image-gen skill 生成图片]
+Claude: [调用 codex-image-gen 生成图片]
 
 用户: 画一张赛博朋克风格的城市
 Claude: [生成 cyberpunk-city.png 到当前目录]
+
+用户: Generate an image of a sunset over mountains
+Claude: [生成 sunset-mountains.png]
 ```
 
-## 🚀 更新
+## 🔄 更新 Plugin
 
 ```bash
-# 拉取最新版本
-cd ~/.claude/skills/codex-image-gen
-curl -o SKILL.md \
-  https://raw.githubusercontent.com/finyorke/claude-skills/main/skills/codex-image-gen/SKILL.md
+# 查看已安装的 plugins
+/plugin list
+
+# 更新到最新版本
+/plugin update codex-image-gen@fun-plugins
 ```
+
+## 📁 仓库结构
+
+```
+claude-skills/
+├── .claude-plugin/
+│   └── marketplace.json      # marketplace 配置
+├── codex-image-gen/         # plugin 目录
+│   ├── .claude-plugin/
+│   │   └── plugin.json      # plugin 元信息
+│   └── skills/
+│       └── codex-image-gen/
+│           └── SKILL.md     # skill 定义
+└── README.md
+```
+
+## 🤝 贡献
+
+欢迎提交新的 plugins！请确保：
+
+1. 在独立目录中组织你的 plugin
+2. 包含 `.claude-plugin/plugin.json` 文件
+3. 在 `.claude-plugin/marketplace.json` 中注册
+4. 更新 README 说明用法
 
 ## 📄 License
 
 MIT
 
-## 🤝 贡献
+## 🐛 问题反馈
 
-欢迎提交 PR 或 Issue！
+如有问题，请在 [Issues](https://github.com/finyorke/claude-skills/issues) 中反馈。
