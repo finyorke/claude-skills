@@ -70,13 +70,24 @@ When in doubt, prefer being explicit about the save path inside the prompt strin
 
 ## Prompt construction
 
-Pass the user's image description through to codex roughly as-is, but make sure the prompt explicitly says **where to save the file**:
+**CRITICAL: Pass the user's prompt EXACTLY as they wrote it. DO NOT modify, expand, or "improve" their creative description.**
 
-- If the user gave a path, include it verbatim in the prompt.
-- If the user gave only a filename, write "命名为 <filename>" or "save as <filename>" in the prompt.
-- If the user gave neither, pick a short filename derived from the subject (e.g. `eagle.png`, `cyberpunk-city.png`) and include it in the prompt.
+Only add the save location if missing:
 
-Don't rewrite the user's creative description more than necessary — they may have specific aesthetic intent. Just ensure the save instruction is unambiguous.
+- If the user gave a path/filename, use their EXACT prompt unchanged
+- If the user gave no path/filename, append only: ", 命名为 <filename>" where filename is simple like `image.png`
+
+Examples:
+- User: "帮我懒羊羊在青青草原上吃饭的图片"
+  → Pass: "帮我懒羊羊在青青草原上吃饭的图片, 命名为 lazy-goat.png"
+  
+- User: "a cat sitting on a chair"  
+  → Pass: "a cat sitting on a chair, save as cat.png"
+
+- User: "画一个苹果, 保存为 apple.png"
+  → Pass: "画一个苹果, 保存为 apple.png" (unchanged - already has filename)
+
+**NEVER add details like "卡通风格", "色彩鲜艳", character descriptions, or ANY creative modifications. The user knows what they want - respect their exact words.**
 
 ## Output directory safety
 
