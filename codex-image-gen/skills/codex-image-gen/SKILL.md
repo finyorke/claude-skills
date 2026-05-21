@@ -35,37 +35,37 @@ If it returns nothing, tell the user to install codex from https://github.com/op
 
 These flags are **always** used, never omitted, never substituted:
 
+- `-a never` — never ask for approval (non-interactive)
 - `exec` — one-shot execution mode
 - `-s workspace-write` — allows writing files in the workspace
+- `--cd <DIR>` — ALWAYS specify a working directory (see rules below)
 - `--skip-git-repo-check` — don't refuse to run outside a git repo
-
-The only flag that varies is `--cd <DIR>` (see "Working directory rules" below).
 
 Template:
 
 ```bash
-codex exec -s workspace-write [--cd <WORKDIR>] --skip-git-repo-check "<PROMPT>"
+codex -a never exec -s workspace-write --cd <WORKDIR> --skip-git-repo-check "<PROMPT>"
 ```
 
-Do not add any other flags the user didn't explicitly request. The workspace-write permission is sufficient for image generation tasks.
+**CRITICAL**: The `--cd` flag is MANDATORY. If the user doesn't specify a directory, use Claude's current working directory. This ensures proper permissions.
 
 ## Working directory rules
 
-Decide whether to pass `--cd` based on how the user phrased the save path:
+**ALWAYS include `--cd` with an appropriate directory:**
 
 1. **No path mentioned, or only a bare filename** (e.g. "命名为 test.png", or no filename at all)
-   → omit `--cd`. The image lands in Claude's current working directory. If no filename was given, pick a short descriptive one like `eagle.png` and tell the user.
-   Example: `codex exec -s workspace-write --skip-git-repo-check "生成一只鹰在天空飞翔的画面，命名为 test.png"`
+   → Use Claude's current working directory: `--cd $(pwd)`
+   Example: `codex -a never exec -s workspace-write --cd $(pwd) --skip-git-repo-check "生成一只鹰在天空飞翔的画面，命名为 test.png"`
 
-2. **Relative path under a specific project directory** (e.g. user says "保存到当前目录 ./test/image.png" while referring to a named project)
-   → use `--cd <that project dir>` and keep the relative path in the prompt.
-   Example: `codex exec -s workspace-write --cd /Users/fun/SII/Research/game_generate --skip-git-repo-check "生成鹰在飞翔的画面，保存到 ./test/image.png"`
+2. **Relative path** (e.g. "./images/test.png", "output/image.png")
+   → Use Claude's current working directory: `--cd $(pwd)` and keep the relative path in the prompt
+   Example: `codex -a never exec -s workspace-write --cd $(pwd) --skip-git-repo-check "生成鹰在飞翔的画面，保存到 ./images/test.png"`
 
 3. **Absolute path** (e.g. "/Users/fun/.../image.png")
-   → pass `--cd <parent project dir>` AND keep the absolute path in the prompt. Codex needs a working directory anchor; the absolute path inside the prompt tells it exactly where to write.
-   Example: `codex exec -s workspace-write --cd /Users/fun/SII/Research/game_generate --skip-git-repo-check "生成鹰在飞翔的画面，存储为 /Users/fun/SII/Research/game_generate/test/image.png"`
+   → Extract the parent directory for `--cd` and use the absolute path in the prompt
+   Example: `codex -a never exec -s workspace-write --cd /Users/fun/projects --skip-git-repo-check "生成鹰在飞翔的画面，存储为 /Users/fun/projects/images/test.png"`
 
-When in doubt, prefer being explicit about the save path inside the prompt string — codex follows the prompt's instructions literally.
+**Note**: The prompt can contain either relative or absolute paths - codex will handle both correctly as long as `--cd` is set properly.
 
 ## Prompt construction
 
@@ -120,25 +120,25 @@ This avoids codex failing on a missing folder.
 **User says:** "帮我在当前目录生成一个鹰在天空中飞翔的画面, 命名为 test.png"
 
 ```bash
-codex exec -s workspace-write --skip-git-repo-check \
+codex -a never exec -s workspace-write --cd $(pwd) --skip-git-repo-check \
   "帮我在当前目录生成一个鹰在天空中飞翔的画面, 命名为 test.png"
 ```
 
 **User says:** "帮我生成一个鹰在天空中飞翔的画面, 保存到当前目录，然后存储为 ./test/image.png" (working in /Users/fun/SII/Research/game_generate)
 
 ```bash
-mkdir -p /Users/fun/SII/Research/game_generate/test
-codex exec -s workspace-write \
-  --cd /Users/fun/SII/Research/game_generate \
+mkdir -p ./test
+codex -a never exec -s workspace-write \
+  --cd $(pwd) \
   --skip-git-repo-check \
-  "帮我生成一个鹰在天空中飞翔的画面, 保存到当前目录，然后存储为 ./test/image.png"
+  "帮我生成一个鹰在天空中飞翔的画面, 保存到 ./test/image.png"
 ```
 
 **User says:** "帮我生成一个鹰在天空中飞翔的画面, 存储为 /Users/fun/SII/Research/game_generate/test/image.png"
 
 ```bash
 mkdir -p /Users/fun/SII/Research/game_generate/test
-codex exec -s workspace-write \
+codex -a never exec -s workspace-write \
   --cd /Users/fun/SII/Research/game_generate \
   --skip-git-repo-check \
   "帮我生成一个鹰在天空中飞翔的画面, 存储为 /Users/fun/SII/Research/game_generate/test/image.png"
@@ -147,7 +147,7 @@ codex exec -s workspace-write \
 **User says (no path at all):** "画一张赛博朋克城市的图"
 
 ```bash
-codex exec -s workspace-write --skip-git-repo-check \
+codex -a never exec -s workspace-write --cd $(pwd) --skip-git-repo-check \
   "生成一张赛博朋克风格的城市图片，命名为 cyberpunk-city.png"
 ```
 
@@ -158,5 +158,5 @@ Then tell the user: "已生成 cyberpunk-city.png 到当前目录。"
 - **Don't drop `--skip-git-repo-check`** — codex may refuse to run outside a git repo without it.
 - **Don't drop the quotes around the prompt** — Chinese characters and shell metacharacters will otherwise break the command.
 - **Don't run codex from Claude's working dir when the user clearly intends a different project root.** When the user mentions "当前目录" along with a specific project name or path, use `--cd` to anchor codex there.
-- **Don't add other flags** the user didn't ask for. The three flags above are the contract.
+- **Don't add other flags** the user didn't ask for. The five flags above are the contract.
 - **workspace-write is sufficient** — it provides the necessary permissions for image generation.
