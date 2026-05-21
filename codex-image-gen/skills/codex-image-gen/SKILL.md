@@ -35,9 +35,8 @@ If it returns nothing, tell the user to install codex from https://github.com/op
 
 These flags are **always** used, never omitted, never substituted:
 
-- `-a never` — never ask for approval (non-interactive)
 - `exec` — one-shot execution mode
-- `-s danger-full-access` — full sandbox bypass (required so codex can write files anywhere)
+- `-s workspace-write` — allows writing files in the workspace
 - `--skip-git-repo-check` — don't refuse to run outside a git repo
 
 The only flag that varies is `--cd <DIR>` (see "Working directory rules" below).
@@ -45,10 +44,10 @@ The only flag that varies is `--cd <DIR>` (see "Working directory rules" below).
 Template:
 
 ```bash
-codex -a never exec -s danger-full-access [--cd <WORKDIR>] --skip-git-repo-check "<PROMPT>"
+codex exec -s workspace-write [--cd <WORKDIR>] --skip-git-repo-check "<PROMPT>"
 ```
 
-Do not add any other flags the user didn't explicitly request. Do not change `-s danger-full-access` to a safer mode even if the destination looks sensitive — the user has accepted this contract.
+Do not add any other flags the user didn't explicitly request. The workspace-write permission is sufficient for image generation tasks.
 
 ## Working directory rules
 
@@ -56,15 +55,15 @@ Decide whether to pass `--cd` based on how the user phrased the save path:
 
 1. **No path mentioned, or only a bare filename** (e.g. "命名为 test.png", or no filename at all)
    → omit `--cd`. The image lands in Claude's current working directory. If no filename was given, pick a short descriptive one like `eagle.png` and tell the user.
-   Example: `codex -a never exec -s danger-full-access --skip-git-repo-check "生成一只鹰在天空飞翔的画面，命名为 test.png"`
+   Example: `codex exec -s workspace-write --skip-git-repo-check "生成一只鹰在天空飞翔的画面，命名为 test.png"`
 
 2. **Relative path under a specific project directory** (e.g. user says "保存到当前目录 ./test/image.png" while referring to a named project)
    → use `--cd <that project dir>` and keep the relative path in the prompt.
-   Example: `codex -a never exec -s danger-full-access --cd /Users/fun/SII/Research/game_generate --skip-git-repo-check "生成鹰在飞翔的画面，保存到 ./test/image.png"`
+   Example: `codex exec -s workspace-write --cd /Users/fun/SII/Research/game_generate --skip-git-repo-check "生成鹰在飞翔的画面，保存到 ./test/image.png"`
 
 3. **Absolute path** (e.g. "/Users/fun/.../image.png")
    → pass `--cd <parent project dir>` AND keep the absolute path in the prompt. Codex needs a working directory anchor; the absolute path inside the prompt tells it exactly where to write.
-   Example: `codex -a never exec -s danger-full-access --cd /Users/fun/SII/Research/game_generate --skip-git-repo-check "生成鹰在飞翔的画面，存储为 /Users/fun/SII/Research/game_generate/test/image.png"`
+   Example: `codex exec -s workspace-write --cd /Users/fun/SII/Research/game_generate --skip-git-repo-check "生成鹰在飞翔的画面，存储为 /Users/fun/SII/Research/game_generate/test/image.png"`
 
 When in doubt, prefer being explicit about the save path inside the prompt string — codex follows the prompt's instructions literally.
 
@@ -121,7 +120,7 @@ This avoids codex failing on a missing folder.
 **User says:** "帮我在当前目录生成一个鹰在天空中飞翔的画面, 命名为 test.png"
 
 ```bash
-codex -a never exec -s danger-full-access --skip-git-repo-check \
+codex exec -s workspace-write --skip-git-repo-check \
   "帮我在当前目录生成一个鹰在天空中飞翔的画面, 命名为 test.png"
 ```
 
@@ -129,7 +128,7 @@ codex -a never exec -s danger-full-access --skip-git-repo-check \
 
 ```bash
 mkdir -p /Users/fun/SII/Research/game_generate/test
-codex -a never exec -s danger-full-access \
+codex exec -s workspace-write \
   --cd /Users/fun/SII/Research/game_generate \
   --skip-git-repo-check \
   "帮我生成一个鹰在天空中飞翔的画面, 保存到当前目录，然后存储为 ./test/image.png"
@@ -139,7 +138,7 @@ codex -a never exec -s danger-full-access \
 
 ```bash
 mkdir -p /Users/fun/SII/Research/game_generate/test
-codex -a never exec -s danger-full-access \
+codex exec -s workspace-write \
   --cd /Users/fun/SII/Research/game_generate \
   --skip-git-repo-check \
   "帮我生成一个鹰在天空中飞翔的画面, 存储为 /Users/fun/SII/Research/game_generate/test/image.png"
@@ -148,7 +147,7 @@ codex -a never exec -s danger-full-access \
 **User says (no path at all):** "画一张赛博朋克城市的图"
 
 ```bash
-codex -a never exec -s danger-full-access --skip-git-repo-check \
+codex exec -s workspace-write --skip-git-repo-check \
   "生成一张赛博朋克风格的城市图片，命名为 cyberpunk-city.png"
 ```
 
@@ -156,8 +155,8 @@ Then tell the user: "已生成 cyberpunk-city.png 到当前目录。"
 
 ## Common pitfalls
 
-- **Don't drop `--skip-git-repo-check`** — codex refuses to run with `danger-full-access` outside a git repo without it.
+- **Don't drop `--skip-git-repo-check`** — codex may refuse to run outside a git repo without it.
 - **Don't drop the quotes around the prompt** — Chinese characters and shell metacharacters will otherwise break the command.
 - **Don't run codex from Claude's working dir when the user clearly intends a different project root.** When the user mentions "当前目录" along with a specific project name or path, use `--cd` to anchor codex there.
-- **Don't add other flags** the user didn't ask for. The four flags above are the contract.
-- **Don't substitute `danger-full-access` with a safer sandbox mode.** The user has accepted this as the fixed contract.
+- **Don't add other flags** the user didn't ask for. The three flags above are the contract.
+- **workspace-write is sufficient** — it provides the necessary permissions for image generation.
