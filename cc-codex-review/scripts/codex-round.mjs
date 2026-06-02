@@ -56,6 +56,17 @@ function main() {
     input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
 
+  // codex 缺失或未登录 → 提示用户 /codex:setup
+  const errText = (res.stderr || '') + (res.error ? String(res.error.message || res.error) : '');
+  const unavailable =
+    (res.error && res.error.code === 'ENOENT') ||
+    res.status === 127 ||
+    /not logged in|not authenticated|please run .*login|unauthor/i.test(errText);
+  if (unavailable) {
+    emit({ ok: false, error: 'codex_unavailable', detail: errText.trim() || 'codex not found or not authenticated' });
+    process.exit(0);
+  }
+
   const threadId = extractThreadId(res.stdout);
 
   let verdict = null, rawMsg = '';

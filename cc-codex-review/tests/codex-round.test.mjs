@@ -79,3 +79,21 @@ test('resume round: passes `exec resume <id>` and never --last', () => {
   assert.equal(argv[i + 1], TID, 'resume must be followed by the captured thread id');
   assert.ok(!argv.includes('--last'), 'must never use --last');
 });
+
+test('codex unavailable (auth fail): ok=false, error=codex_unavailable', () => {
+  const res = runRound([], 'PACKET', { MOCK_FAIL: 'auth' });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'codex_unavailable');
+});
+
+test('codex binary missing (ENOENT): ok=false, error=codex_unavailable', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cc-round-'));
+  const out = join(dir, 'last.json');
+  const stdout = execFileSync('node', [ROUND, '--schema', SCHEMA, '--out', out], {
+    input: 'PACKET', encoding: 'utf8',
+    env: { ...process.env, CODEX_BIN: '/nonexistent/codex-binary-xyz' },
+  });
+  const res = JSON.parse(stdout.trim().split('\n').filter(Boolean).pop());
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'codex_unavailable');
+});
