@@ -1,0 +1,8 @@
+{
+  "name": "cc-codex-review",
+  "version": "0.1.0",
+  "description": "Claude × Codex 收敛互审 — 两方迭代复核直到双方 AGREE",
+  "author": {
+    "name": "finyorke"
+  }
+}
