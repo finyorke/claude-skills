@@ -144,19 +144,23 @@ Codex 是对抗式的、又默认无硬上限,若每轮失忆重读,可能反复
 - **必须按 id,不能用 `--last`**(已实证,codex-cli 0.135.0):`resume --last` = 取**当前 cwd 下最近一条记录的 session**,它**只按 cwd 过滤、不区分 exec 与交互(`codex-tui`)会话**。我们的循环 `--cd <repo>` 跑在项目目录,用户若同时在同一目录手动开了 `codex`,`--last` 会**串到用户的交互会话**;本机还有 `codex-image-gen` 等也在调 codex。故只用捕获到的 `thread_id`。
 - **id 捕获用 stdout in-band 解析**,不靠"找 `~/.codex/sessions` 下最新文件"——后者有并发写竞态,等于另一种 `--last` 陷阱。
 
-### verdict schema (草案)
+### verdict schema
+
+> ⚠️ codex 的 `--output-schema` 走 OpenAI 结构化输出的 **strict 模式**:每个 object 必须 `additionalProperties:false`,且 `required` 必须**列出 properties 的全部键**(实测 codex-cli 0.135.0:否则 `invalid_json_schema` 报错、turn.failed、退出 1、不写 verdict 文件)。故 `remaining_issues`、`severity` 都在 `required` 中(AGREE 时 `remaining_issues` 为空数组)。`tests/verdict-schema.test.mjs` 对此做了 hermetic 守护。
 
 ```json
 {
   "type": "object",
-  "required": ["verdict", "rationale"],
+  "additionalProperties": false,
+  "required": ["verdict", "remaining_issues", "rationale"],
   "properties": {
     "verdict": { "type": "string", "enum": ["AGREE", "CHANGES"] },
     "remaining_issues": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["title", "detail"],
+        "additionalProperties": false,
+        "required": ["title", "detail", "severity"],
         "properties": {
           "title": { "type": "string" },
           "detail": { "type": "string" },
@@ -219,11 +223,14 @@ LLM 循环难做单元测试,采用:
 - **冒烟测试**:对一个 trivial 仓库跑一轮,验证 verdict JSON 解析、AGREE/CHANGES 分支、停滞检测触发。
 - 测试深度按用户需求伸缩。
 
-## 11. 待实现时验证的开放点
+## 11. 开放点与实测结论(codex-cli 0.135.0)
 
-- 插件 command 的实际调用名(`/cc-codex-review:review` 能否简化)。
-- `codex exec --output-schema` 在当前 codex 版本的行为是否稳定;不稳则回退到纯文本 "VERDICT: AGREE/CHANGES" 约定 + 解析。
-- 评审包经 stdin 传入与 prompt 参数的组合行为(stdin 作 `<stdin>` 块附加)。
-- **`--json` 与 `--output-schema` / `-o` 的共存**:首轮要同时用 `--json`(拿 `thread_id`)和 `--output-schema` + `-o`(拿结构化 verdict)。已知三者命令行可并列;待确认 `--json` 模式下最终 verdict 仍能通过 `-o` 落盘(或改为直接从 `--json` 流的末条 `item.completed.agent_message` 解析)。
-- **`resume <thread_id>` 是否完整保留 `--output-schema` / 沙箱设置**:resume 续接时需重新带上 `-s read-only --output-schema ...`;待确认这些 flag 在 resume 子命令下行为一致。
-- **降级**:若任一环节(id 捕获 / resume)在实测中不稳,降级为「每轮 fresh、整包重发、无 resume」并向用户告警「对抗式 + 无硬上限下可能不收敛,建议设 `--max-rounds`」。
+已实测确认(冒烟见 README / Task 7):
+- ✅ **`thread_id` 捕获**:`codex exec --json` stdout 首行 `thread.started.thread_id` 为非空 UUID,in-band 拿到,可用于 resume。
+- ✅ **`--json` + `--output-schema` + `-o` 共存**:三者并列可正常工作,verdict 通过 `-o` 落盘;前提是 schema 满足 strict 模式(见 §6 ⚠️)。最初的非 strict schema 会让 codex 报 `invalid_json_schema` 并退出 1、不写文件——已修复并加 `verdict-schema.test.mjs` 守护。
+- ⚠️ codex 把 API 级错误写进 **stdout 的 `{"type":"error"}` / `turn.failed` 事件**(不是 stderr),且进程退出码为 1。脚本将这类「跑了但没产出合法 verdict」归为 `bad_verdict` 并带 `codex_exit`。
+
+仍待实测(留给真实多轮使用时验证):
+- 插件 command 的实际调用名(`/cc-codex-review:review` 能否省略命名空间)—— 需安装后在 Claude Code 里确认(Task 7 dry-run 步骤)。
+- **`resume <thread_id>` 是否完整保留 `--output-schema` / 沙箱设置**:resume 续接时脚本会重新带上 `-s read-only --output-schema ...`;单测已覆盖「会传 `resume <id>`、绝不用 `--last`」,但真实跨轮的 schema/sandbox 行为待多轮实跑确认。
+- **降级**:若 resume 在实测中不稳,降级为「每轮 fresh、整包重发、无 resume」并向用户告警「对抗式 + 无硬上限下可能不收敛,建议设 `--max-rounds`」。

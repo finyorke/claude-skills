@@ -17,5 +17,6 @@ claude plugin install cc-codex-review@fun-plugins
 
 ## 开发
 ```
-node --test cc-codex-review/tests/codex-round.test.mjs
+node --test cc-codex-review/tests/*.test.mjs
 ```
+(本机 Node v22 不支持 `--test <目录>` 自动发现,需用上面的 glob 同时跑两个测试文件。)

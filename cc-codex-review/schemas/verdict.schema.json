@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "rationale"],
+  "required": ["verdict", "remaining_issues", "rationale"],
   "properties": {
     "verdict": { "type": "string", "enum": ["AGREE", "CHANGES"] },
     "remaining_issues": {
@@ -9,7 +9,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["title", "detail"],
+        "required": ["title", "detail", "severity"],
         "properties": {
           "title": { "type": "string" },
           "detail": { "type": "string" },
