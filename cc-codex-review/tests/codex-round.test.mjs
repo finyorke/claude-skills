@@ -103,7 +103,7 @@ test('bad verdict then good: retries once and succeeds', () => {
   const res = runRound([], 'PACKET', {
     MOCK_BAD_OUTPUT: '1',
     MOCK_COUNTER: counter,
-    MOCK_VERDICT: JSON.stringify({ verdict: 'CHANGES', remaining_issues: [{ title: 't', detail: 'd' }], rationale: 'r' }),
+    MOCK_VERDICT: JSON.stringify({ verdict: 'CHANGES', remaining_issues: [{ title: 't', detail: 'd', severity: 'major' }], rationale: 'r' }),
   });
   assert.equal(res.ok, true);
   assert.equal(res.verdict, 'CHANGES');

@@ -122,6 +122,7 @@ Claude 组装如下文本,经 stdin 喂给 `codex exec`:
 
 ```bash
 codex exec \
+  --json \
   -s read-only \
   [--cd <repo>] [--skip-git-repo-check] \
   [-m <model>] \
