@@ -62,3 +62,20 @@ test('fresh round: --repo => passes --cd <dir>, not --skip-git-repo-check', () =
   assert.ok(i >= 0 && argv[i + 1] === '/some/repo', 'should pass --cd <repo>');
   assert.ok(!argv.includes('--skip-git-repo-check'));
 });
+
+test('resume round: passes `exec resume <id>` and never --last', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cc-round-'));
+  const out = join(dir, 'last.json');
+  const argvLog = join(dir, 'argv.log');
+  const TID = '019e2222-bbbb-7000-8000-0000000def01';
+  execFileSync('node', [ROUND, '--schema', SCHEMA, '--out', out, '--resume', TID], {
+    input: 'DELTA', encoding: 'utf8',
+    env: { ...process.env, CODEX_BIN: MOCK, MOCK_ARGV_LOG: argvLog },
+  });
+  const argv = JSON.parse(readFileSync(argvLog, 'utf8').trim().split('\n')[0]);
+  const i = argv.indexOf('resume');
+  assert.ok(i >= 0, 'should call exec resume');
+  assert.equal(argv[0], 'exec');
+  assert.equal(argv[i + 1], TID, 'resume must be followed by the captured thread id');
+  assert.ok(!argv.includes('--last'), 'must never use --last');
+});

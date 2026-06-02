@@ -18,7 +18,7 @@ function parseArgs(argv) {
 
 function buildCodexArgs(a) {
   const args = ['exec'];
-  // NOTE: resume 分支在 Task 3 加入
+  if (a.resume) args.push('resume', a.resume);
   args.push('--json', '-s', 'read-only', '--output-schema', a.schema, '-o', a.out);
   if (a.repo) args.push('--cd', a.repo);
   else args.push('--skip-git-repo-check');
