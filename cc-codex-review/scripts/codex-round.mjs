@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 单轮 Codex 复核原语:stdin=评审包,stdout=一行结果 JSON。纯确定性,无循环。
 import { spawnSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 
 function parseArgs(argv) {
   const a = { repo: null, model: null, resume: null, schema: null, out: null };
@@ -54,8 +54,10 @@ function main() {
 
   const codexArgs = buildCodexArgs(a);
   let threadId = null, verdict = null, rawMsg = '';
+  let lastStatus = null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0 && existsSync(a.out)) unlinkSync(a.out);
     const res = spawnSync(bin, codexArgs, {
       input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
     });
@@ -70,6 +72,7 @@ function main() {
       emit({ ok: false, error: 'codex_unavailable', detail: errText.trim() || 'codex not found or not authenticated' });
       process.exit(0);
     }
+    lastStatus = res.status;
 
     threadId = extractThreadId(res.stdout) || threadId;
 
@@ -81,7 +84,7 @@ function main() {
   }
 
   if (!verdict || (verdict.verdict !== 'AGREE' && verdict.verdict !== 'CHANGES')) {
-    emit({ ok: false, error: 'bad_verdict', thread_id: threadId, raw_message: rawMsg });
+    emit({ ok: false, error: 'bad_verdict', thread_id: threadId, raw_message: rawMsg, codex_exit: lastStatus });
     process.exit(0);
   }
 

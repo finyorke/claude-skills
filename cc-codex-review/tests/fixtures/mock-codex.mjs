@@ -29,7 +29,11 @@ let msg = process.env.MOCK_VERDICT
 
 // 第一次写非法、第二次写合法(测重试)
 if (process.env.MOCK_BAD_OUTPUT === '1') {
-  const counterFile = process.env.MOCK_COUNTER || '/tmp/cc-codex-mock-counter';
+  if (!process.env.MOCK_COUNTER) {
+    process.stderr.write('mock-codex: MOCK_BAD_OUTPUT requires MOCK_COUNTER\n');
+    process.exit(1);
+  }
+  const counterFile = process.env.MOCK_COUNTER;
   let n = 0;
   try { n = parseInt(readFileSync(counterFile, 'utf8'), 10) || 0; } catch {}
   writeFileSync(counterFile, String(n + 1));
