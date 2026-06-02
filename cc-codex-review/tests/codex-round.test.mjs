@@ -97,3 +97,15 @@ test('codex binary missing (ENOENT): ok=false, error=codex_unavailable', () => {
   assert.equal(res.ok, false);
   assert.equal(res.error, 'codex_unavailable');
 });
+
+test('bad verdict then good: retries once and succeeds', () => {
+  const counter = join(mkdtempSync(join(tmpdir(), 'cc-round-')), 'counter');
+  const res = runRound([], 'PACKET', {
+    MOCK_BAD_OUTPUT: '1',
+    MOCK_COUNTER: counter,
+    MOCK_VERDICT: JSON.stringify({ verdict: 'CHANGES', remaining_issues: [{ title: 't', detail: 'd' }], rationale: 'r' }),
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.verdict, 'CHANGES');
+  assert.equal(res.remaining_issues.length, 1);
+});

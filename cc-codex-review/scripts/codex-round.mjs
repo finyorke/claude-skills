@@ -52,27 +52,32 @@ function main() {
   const bin = process.env.CODEX_BIN || 'codex';
   const input = readFileSync(0, 'utf8'); // stdin 评审包
 
-  const res = spawnSync(bin, buildCodexArgs(a), {
-    input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-  });
+  const codexArgs = buildCodexArgs(a);
+  let threadId = null, verdict = null, rawMsg = '';
 
-  // codex 缺失或未登录 → 提示用户 /codex:setup
-  const errText = (res.stderr || '') + (res.error ? String(res.error.message || res.error) : '');
-  const unavailable =
-    (res.error && res.error.code === 'ENOENT') ||
-    res.status === 127 ||
-    /not logged in|not authenticated|please run .*login|unauthor/i.test(errText);
-  if (unavailable) {
-    emit({ ok: false, error: 'codex_unavailable', detail: errText.trim() || 'codex not found or not authenticated' });
-    process.exit(0);
-  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = spawnSync(bin, codexArgs, {
+      input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    });
 
-  const threadId = extractThreadId(res.stdout);
+    // codex 缺失或未登录 → 提示用户 /codex:setup(不重试)
+    const errText = (res.stderr || '') + (res.error ? String(res.error.message || res.error) : '');
+    const unavailable =
+      (res.error && res.error.code === 'ENOENT') ||
+      res.status === 127 ||
+      /not logged in|not authenticated|please run .*login|unauthor/i.test(errText);
+    if (unavailable) {
+      emit({ ok: false, error: 'codex_unavailable', detail: errText.trim() || 'codex not found or not authenticated' });
+      process.exit(0);
+    }
 
-  let verdict = null, rawMsg = '';
-  if (existsSync(a.out)) {
-    rawMsg = readFileSync(a.out, 'utf8').trim();
-    try { verdict = JSON.parse(rawMsg); } catch { verdict = null; }
+    threadId = extractThreadId(res.stdout) || threadId;
+
+    if (existsSync(a.out)) {
+      rawMsg = readFileSync(a.out, 'utf8').trim();
+      try { verdict = JSON.parse(rawMsg); } catch { verdict = null; }
+    }
+    if (verdict && (verdict.verdict === 'AGREE' || verdict.verdict === 'CHANGES')) break;
   }
 
   if (!verdict || (verdict.verdict !== 'AGREE' && verdict.verdict !== 'CHANGES')) {
