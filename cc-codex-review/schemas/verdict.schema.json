@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "rationale"],
+  "properties": {
+    "verdict": { "type": "string", "enum": ["AGREE", "CHANGES"] },
+    "remaining_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "detail"],
+        "properties": {
+          "title": { "type": "string" },
+          "detail": { "type": "string" },
+          "severity": { "type": "string", "enum": ["blocker", "major", "minor"] }
+        }
+      }
+    },
+    "rationale": { "type": "string" }
+  }
+}

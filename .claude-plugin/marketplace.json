@@ -8,6 +8,11 @@
       "name": "codex-image-gen",
       "source": "./codex-image-gen",
       "description": "用 codex CLI 生成图片 - 支持中英文触发词"
+    },
+    {
+      "name": "cc-codex-review",
+      "source": "./cc-codex-review",
+      "description": "Claude × Codex 收敛互审 — 两方迭代复核直到双方 AGREE"
     }
   ]
 }
