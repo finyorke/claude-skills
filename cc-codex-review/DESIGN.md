@@ -242,7 +242,8 @@ LLM 循环难做单元测试,采用:
 
 - ✅ **`exec resume` 的 flag 集**(自评 dogfood 实测发现并修复):`codex exec resume` **不接受 `-s`/`--cd`**(传了报 `unexpected argument` 退出 2),最初实现照搬 fresh flag 导致**多轮 resume 在真机 100% 失败**——单测因 mock 接受任意参数而漏检。已修:resume 轮省去 `-s`/`--cd`(沙箱/cwd 从原 session 继承),`--output-schema`/`-o`/`--json`/`-m`/`--skip-git-repo-check` 保留;mock 改为在 resume 下拒绝 `-s`/`--cd` 做回归守护。
 
-仍待实测(留给真实多轮使用时验证):
+- ✅ **多轮 resume 端到端**(真·多轮 dogfood 实测):round 1 fresh 抓 `thread_id` → round 2 `exec resume <id>` 成功(exit 0),且 Codex **保留了第 1 轮上下文**并接上第 2 轮增量;`--output-schema` 在 resume 轮语义级生效(`truncated`/`reviewed_scope`/`assumptions` 正确填充)。即 resume 不只是参数被接受,而是真按 schema 产出 verdict。
+
+仍待实测:
 - 插件 command 的实际调用名(`/cc-codex-review:review` 能否省略命名空间)—— 需安装后在 Claude Code 里确认。
-- **resume 轮里 `--output-schema` 的语义级生效**:已确认参数被接受、解析通过;但「resumed turn 是否真按 schema 产出 verdict」需一次真·多轮自评验证(parser 接受 ≠ schema 强制生效)。
 - 大材料的分块评审策略尚为「摘要 + truncated 标注」,未实现自动分块。
