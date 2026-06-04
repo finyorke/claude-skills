@@ -19,9 +19,15 @@ function parseArgs(argv) {
 function buildCodexArgs(a) {
   const args = ['exec'];
   if (a.resume) args.push('resume', a.resume);
-  args.push('--json', '-s', 'read-only', '--output-schema', a.schema, '-o', a.out);
-  if (a.repo) args.push('--cd', a.repo);
-  else args.push('--skip-git-repo-check');
+  args.push('--json', '--output-schema', a.schema, '-o', a.out);
+  // 沙箱与工作目录:fresh 时显式设置。`codex exec resume` 不接受 -s/--cd
+  // (实测 0.135.0 报 "unexpected argument" 退出 2);resume 从原 session 继承,故略过。
+  if (!a.resume) {
+    args.push('-s', 'read-only');
+    if (a.repo) args.push('--cd', a.repo);
+  }
+  // 两种模式都接受 --skip-git-repo-check;总是加上,使非 git 目录的 --repo 也能用(文本评审)。
+  args.push('--skip-git-repo-check');
   if (a.model) args.push('-m', a.model);
   args.push('-'); // 从 stdin 读 prompt
   return args;
@@ -54,10 +60,11 @@ function main() {
 
   const codexArgs = buildCodexArgs(a);
   let threadId = null, verdict = null, rawMsg = '';
-  let lastStatus = null;
+  let lastStatus = null, lastStdout = '', lastStderr = '';
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0 && existsSync(a.out)) unlinkSync(a.out);
+    // 每次尝试前都清掉旧的 verdict 文件,防止读到上一轮/上次尝试的残留导致假成功。
+    if (existsSync(a.out)) unlinkSync(a.out);
     const res = spawnSync(bin, codexArgs, {
       input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
     });
@@ -73,6 +80,8 @@ function main() {
       process.exit(0);
     }
     lastStatus = res.status;
+    lastStdout = res.stdout || '';
+    lastStderr = res.stderr || '';
 
     threadId = extractThreadId(res.stdout) || threadId;
 
@@ -84,7 +93,12 @@ function main() {
   }
 
   if (!verdict || (verdict.verdict !== 'AGREE' && verdict.verdict !== 'CHANGES')) {
-    emit({ ok: false, error: 'bad_verdict', thread_id: threadId, raw_message: rawMsg, codex_exit: lastStatus });
+    emit({
+      ok: false, error: 'bad_verdict', thread_id: threadId, raw_message: rawMsg,
+      codex_exit: lastStatus,
+      stdout_tail: lastStdout.slice(-2000),
+      stderr_tail: lastStderr.slice(-1000),
+    });
     process.exit(0);
   }
 
@@ -94,6 +108,9 @@ function main() {
     verdict: verdict.verdict,
     remaining_issues: verdict.remaining_issues || [],
     rationale: verdict.rationale || '',
+    truncated: !!verdict.truncated,
+    reviewed_scope: verdict.reviewed_scope || '',
+    assumptions: verdict.assumptions || [],
   });
 }
 

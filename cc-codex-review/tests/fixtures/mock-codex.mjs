@@ -9,6 +9,13 @@ if (process.env.MOCK_ARGV_LOG) {
   appendFileSync(process.env.MOCK_ARGV_LOG, JSON.stringify(argv) + '\n');
 }
 
+// 拟真:`codex exec resume` 不接受 fresh 专属 flag(-s/--sandbox、--cd)。
+// 真实 codex-cli 0.135.0 会报 "unexpected argument" 并退出 2。借此让 resume flag 回归被测出。
+if (argv.includes('resume') && (argv.includes('-s') || argv.includes('--sandbox') || argv.includes('--cd'))) {
+  process.stderr.write("error: unexpected argument found\n\nUsage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]\n");
+  process.exit(2);
+}
+
 // 模拟 codex 缺失/未登录
 if (process.env.MOCK_FAIL === 'auth') {
   process.stderr.write('stream error: Not logged in. Run `codex login` to authenticate.\n');
@@ -26,6 +33,15 @@ const threadId = process.env.MOCK_THREAD_ID || '019e0000-0000-7000-8000-00000000
 // 默认 verdict;可被 MOCK_VERDICT 覆盖
 let msg = process.env.MOCK_VERDICT
   || JSON.stringify({ verdict: 'AGREE', remaining_issues: [], rationale: 'looks good' });
+
+// 模拟「跑了但失败、未写 verdict 文件」:把 API 级错误写进 stdout 事件流(真实 codex 行为),
+// 不写 -o,退出 1。用于测 stale-file 防护(#1)与失败诊断(#2)。
+if (process.env.MOCK_NO_WRITE === '1') {
+  process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: threadId }) + '\n');
+  process.stdout.write(JSON.stringify({ type: 'turn.started' }) + '\n');
+  process.stdout.write(JSON.stringify({ type: 'error', message: 'mock turn.failed: invalid_request_error' }) + '\n');
+  process.exit(1);
+}
 
 // 第一次写非法、第二次写合法(测重试)
 if (process.env.MOCK_BAD_OUTPUT === '1') {

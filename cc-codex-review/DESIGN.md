@@ -131,29 +131,33 @@ codex exec \
   "<对抗复核指令>"  < packet.txt
 ```
 
-- `-s read-only`:只读沙箱 —— Codex 能读文件、跑 git,但**绝不能写**(复核专用,安全)。
-- `--cd <repo>`:`--repo` 给定时设为工作根;否则加 `--skip-git-repo-check` 并在 cwd 跑(纯文本 / diff 评审)。
-- `--output-schema` + `-o`:Codex 输出结构化 verdict,AGREE 判定可靠(不靠字符串匹配)。`-o` 写入最终消息文件,便于捕获。
+- `-s read-only`:只读沙箱 —— Codex 能读文件、跑 git,但**绝不能写**(复核专用,安全)。**仅 fresh 轮传**;`codex exec resume` 不接受 `-s`,沙箱从原 session 继承。
+- `--cd <repo>`:`--repo` 给定时设为工作根。**仅 fresh 轮传**;resume 不接受 `--cd`,工作目录从原 session 继承。
+- `--skip-git-repo-check`:**两种轮次都传**(exec 与 exec resume 都接受)。这样非 git 的 `--repo` 目录也能跑(退化为文本评审),与 §8 一致。
+- `--output-schema` + `-o`:Codex 输出结构化 verdict,AGREE 判定可靠(不靠字符串匹配)。`-o` 写入最终消息文件,便于捕获。**每次调用前都会先删除该文件**,避免读到上一轮残留 → 假成功。
 - `-m <model>`:`--model` 给定时传入。
+- 失败(跑了但没产出合法 verdict)时,`bad_verdict` 结果带 `codex_exit` + `stdout_tail`/`stderr_tail`(codex 把 API 级错误写进 stdout 的 `error`/`turn.failed` 事件,不在 stderr),便于排查。
 
 ### 跨轮记忆:resume by id(防不收敛 + 防串会话)
 
 Codex 是对抗式的、又默认无硬上限,若每轮失忆重读,可能反复重提已被说服的点而**永不收敛**。故循环内让 Codex 保持立场记忆:
 
 - **第 1 轮**:fresh `codex exec --json ...`,发送完整评审包。从 stdout **第一行** `{"type":"thread.started","thread_id":"<UUID>"}` 解析并保存 `thread_id`(不可用 `--ephemeral`,否则无法 resume)。
-- **第 2 轮起**:`codex exec resume <thread_id> ...` 按 **id** 续接,只发**增量**(Claude 对上轮 issue 的逐条回应 + 修订后的主张),不必重发整包,省 token。
+- **第 2 轮起**:`codex exec resume <thread_id> ...` 按 **id** 续接,只发**增量**(Claude 对上轮 issue 的逐条回应 + 修订后的主张),不必重发整包,省 token。⚠️ **resume 的 flag 集与 fresh 不同**:`exec resume` 接受 `--json`/`--output-schema`/`-o`/`-m`/`--skip-git-repo-check`,但**不接受 `-s`/`--cd`**(实测 0.135.0:传了报 `unexpected argument` 退出 2)。故 resume 轮必须省去 `-s`/`--cd`(沙箱与 cwd 从原 session 继承)。`buildCodexArgs` 已据此分支,`tests/codex-round.test.mjs` 有回归守护(mock 在 resume 下拒绝 `-s`/`--cd`)。
 - **必须按 id,不能用 `--last`**(已实证,codex-cli 0.135.0):`resume --last` = 取**当前 cwd 下最近一条记录的 session**,它**只按 cwd 过滤、不区分 exec 与交互(`codex-tui`)会话**。我们的循环 `--cd <repo>` 跑在项目目录,用户若同时在同一目录手动开了 `codex`,`--last` 会**串到用户的交互会话**;本机还有 `codex-image-gen` 等也在调 codex。故只用捕获到的 `thread_id`。
 - **id 捕获用 stdout in-band 解析**,不靠"找 `~/.codex/sessions` 下最新文件"——后者有并发写竞态,等于另一种 `--last` 陷阱。
 
 ### verdict schema
 
-> ⚠️ codex 的 `--output-schema` 走 OpenAI 结构化输出的 **strict 模式**:每个 object 必须 `additionalProperties:false`,且 `required` 必须**列出 properties 的全部键**(实测 codex-cli 0.135.0:否则 `invalid_json_schema` 报错、turn.failed、退出 1、不写 verdict 文件)。故 `remaining_issues`、`severity` 都在 `required` 中(AGREE 时 `remaining_issues` 为空数组)。`tests/verdict-schema.test.mjs` 对此做了 hermetic 守护。
+> ⚠️ codex 的 `--output-schema` 走 OpenAI 结构化输出的 **strict 模式**:每个 object 必须 `additionalProperties:false`,且 `required` 必须**列出 properties 的全部键**(实测 codex-cli 0.135.0:否则 `invalid_json_schema` 报错、turn.failed、退出 1、不写 verdict 文件)。故全部字段(含 `remaining_issues`、`severity`、`truncated`、`reviewed_scope`、`assumptions`)都在 `required` 中(AGREE 时 `remaining_issues` 为空数组)。`tests/verdict-schema.test.mjs` 对此做了 hermetic 守护。
+>
+> `truncated`/`reviewed_scope`/`assumptions` 用于防「截断范围下的误导性 AGREE」:Codex 若只看到部分材料须置 `truncated=true` 并写明范围;命令在收敛输出时会据此标注「非完整签核」。
 
 ```json
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "remaining_issues", "rationale"],
+  "required": ["verdict", "remaining_issues", "rationale", "truncated", "reviewed_scope", "assumptions"],
   "properties": {
     "verdict": { "type": "string", "enum": ["AGREE", "CHANGES"] },
     "remaining_issues": {
@@ -169,7 +173,10 @@ Codex 是对抗式的、又默认无硬上限,若每轮失忆重读,可能反复
         }
       }
     },
-    "rationale": { "type": "string" }
+    "rationale": { "type": "string" },
+    "truncated": { "type": "boolean" },
+    "reviewed_scope": { "type": "string" },
+    "assumptions": { "type": "array", "items": { "type": "string" } }
   }
 }
 ```
@@ -188,8 +195,8 @@ Claude 既是**驱动方**又是**收敛裁判**,还由它组装喂给 Codex 的
 ## 8. 错误处理
 
 - Codex 缺失 / 未登录 → 检测到后提示用户运行 `/codex:setup`,停止。
-- `--repo` 指向非 git 仓库 → 退化为文本评审 + 警告(或 `--skip-git-repo-check`)。
-- Codex 输出不合 schema → 重试一次;再失败则原样呈现给用户。
+- `--repo` 指向非 git 仓库 → 因总是带 `--skip-git-repo-check`(§6),不会被 codex 的 repo 检查挡掉,自然退化为文本/文件评审。
+- Codex 输出不合 schema / 跑了但没写 verdict → 重试一次;再失败则 `bad_verdict`,附 `codex_exit` + `stdout_tail`/`stderr_tail` 供排查。
 - 对话里找不到待审材料、也没传任何输入 → Claude **问用户**评审什么(不瞎猜)。
 - 评审包过大 → Claude 摘要 + 显式说明截断(§5)。
 
@@ -201,8 +208,10 @@ Claude 既是**驱动方**又是**收敛裁判**,还由它组装喂给 Codex 的
 cc-codex-review/
   .claude-plugin/plugin.json        # name, version, description, author
   commands/review.md                # 命令体 = Claude 执行的互审协议
-  schemas/verdict.schema.json        # verdict 结构化输出 schema (可选,或内联生成)
-  DESIGN.md                          # 本设计文档
+  scripts/codex-round.mjs           # 单轮 Codex 调用原语(确定性,可单测)
+  schemas/verdict.schema.json        # verdict 结构化输出 schema(strict 模式)
+  tests/                            # codex-round 单测 + 假 codex + schema strict 守护
+  README.md / DESIGN.md / PLAN.md   # 文档
 ```
 
 根 `marketplace.json` 的 `plugins` 数组追加:
@@ -231,7 +240,10 @@ LLM 循环难做单元测试,采用:
 - ✅ **`--json` + `--output-schema` + `-o` 共存**:三者并列可正常工作,verdict 通过 `-o` 落盘;前提是 schema 满足 strict 模式(见 §6 ⚠️)。最初的非 strict schema 会让 codex 报 `invalid_json_schema` 并退出 1、不写文件——已修复并加 `verdict-schema.test.mjs` 守护。
 - ⚠️ codex 把 API 级错误写进 **stdout 的 `{"type":"error"}` / `turn.failed` 事件**(不是 stderr),且进程退出码为 1。脚本将这类「跑了但没产出合法 verdict」归为 `bad_verdict` 并带 `codex_exit`。
 
-仍待实测(留给真实多轮使用时验证):
-- 插件 command 的实际调用名(`/cc-codex-review:review` 能否省略命名空间)—— 需安装后在 Claude Code 里确认(Task 7 dry-run 步骤)。
-- **`resume <thread_id>` 是否完整保留 `--output-schema` / 沙箱设置**:resume 续接时脚本会重新带上 `-s read-only --output-schema ...`;单测已覆盖「会传 `resume <id>`、绝不用 `--last`」,但真实跨轮的 schema/sandbox 行为待多轮实跑确认。
-- **降级**:若 resume 在实测中不稳,降级为「每轮 fresh、整包重发、无 resume」并向用户告警「对抗式 + 无硬上限下可能不收敛,建议设 `--max-rounds`」。
+- ✅ **`exec resume` 的 flag 集**(自评 dogfood 实测发现并修复):`codex exec resume` **不接受 `-s`/`--cd`**(传了报 `unexpected argument` 退出 2),最初实现照搬 fresh flag 导致**多轮 resume 在真机 100% 失败**——单测因 mock 接受任意参数而漏检。已修:resume 轮省去 `-s`/`--cd`(沙箱/cwd 从原 session 继承),`--output-schema`/`-o`/`--json`/`-m`/`--skip-git-repo-check` 保留;mock 改为在 resume 下拒绝 `-s`/`--cd` 做回归守护。
+
+- ✅ **多轮 resume 端到端**(真·多轮 dogfood 实测):round 1 fresh 抓 `thread_id` → round 2 `exec resume <id>` 成功(exit 0),且 Codex **保留了第 1 轮上下文**并接上第 2 轮增量;`--output-schema` 在 resume 轮语义级生效(`truncated`/`reviewed_scope`/`assumptions` 正确填充)。即 resume 不只是参数被接受,而是真按 schema 产出 verdict。
+
+仍待实测:
+- 插件 command 的实际调用名(`/cc-codex-review:review` 能否省略命名空间)—— 需安装后在 Claude Code 里确认。
+- 大材料的分块评审策略尚为「摘要 + truncated 标注」,未实现自动分块。
