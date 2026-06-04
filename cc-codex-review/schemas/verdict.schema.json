@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "remaining_issues", "rationale"],
+  "required": ["verdict", "remaining_issues", "rationale", "truncated", "reviewed_scope", "assumptions"],
   "properties": {
     "verdict": { "type": "string", "enum": ["AGREE", "CHANGES"] },
     "remaining_issues": {
@@ -17,6 +17,9 @@
         }
       }
     },
-    "rationale": { "type": "string" }
+    "rationale": { "type": "string" },
+    "truncated": { "type": "boolean" },
+    "reviewed_scope": { "type": "string" },
+    "assumptions": { "type": "array", "items": { "type": "string" } }
   }
 }
