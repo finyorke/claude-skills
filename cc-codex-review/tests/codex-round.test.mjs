@@ -156,3 +156,30 @@ test('truncated / reviewed_scope / assumptions pass through to result (#3)', () 
   assert.equal(res.reviewed_scope, 'only first 200 lines');
   assert.deepEqual(res.assumptions, ['tests pass']);
 });
+
+test('P0: issue id + candidate_dispositions pass through (no field-drop)', () => {
+  const res = runRound([], 'DELTA', {
+    MOCK_VERDICT: JSON.stringify({
+      verdict: 'CHANGES',
+      remaining_issues: [{ id: 'I1', title: 't', detail: 'd', severity: 'major' }],
+      candidate_dispositions: [
+        { id: 'C1', disposition: 'confirmed' },
+        { id: 'C2', disposition: 'rejected' },
+      ],
+      rationale: 'r',
+    }),
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.remaining_issues[0].id, 'I1', 'issue id must survive');
+  assert.deepEqual(res.candidate_dispositions, [
+    { id: 'C1', disposition: 'confirmed' },
+    { id: 'C2', disposition: 'rejected' },
+  ], 'candidate_dispositions must pass through, not be dropped');
+});
+
+test('P0: candidate_dispositions defaults to [] when codex omits it', () => {
+  const res = runRound([], 'PACKET', {
+    MOCK_VERDICT: JSON.stringify({ verdict: 'AGREE', remaining_issues: [], rationale: 'ok' }),
+  });
+  assert.deepEqual(res.candidate_dispositions, []);
+});

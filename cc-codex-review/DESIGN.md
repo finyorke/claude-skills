@@ -160,15 +160,17 @@ Codex 是对抗式的,若每轮失忆重读,可能反复重提已被说服的点
 
 ### verdict schema
 
-> ⚠️ codex 的 `--output-schema` 走 OpenAI 结构化输出的 **strict 模式**:每个 object 必须 `additionalProperties:false`,且 `required` 必须**列出 properties 的全部键**(实测 codex-cli 0.135.0:否则 `invalid_json_schema` 报错、turn.failed、退出 1、不写 verdict 文件)。故全部字段(含 `remaining_issues`、`severity`、`truncated`、`reviewed_scope`、`assumptions`)都在 `required` 中(AGREE 时 `remaining_issues` 为空数组)。`tests/verdict-schema.test.mjs` 对此做了 hermetic 守护。
+> ⚠️ codex 的 `--output-schema` 走 OpenAI 结构化输出的 **strict 模式**:每个 object 必须 `additionalProperties:false`,且 `required` 必须**列出 properties 的全部键**(实测 codex-cli 0.135.0:否则 `invalid_json_schema` 报错、turn.failed、退出 1、不写 verdict 文件)。故全部字段都在 `required` 中(AGREE 时 `remaining_issues` 为空数组)。`tests/verdict-schema.test.mjs` 对此做了 hermetic 守护。
 >
 > `truncated`/`reviewed_scope`/`assumptions` 用于防「截断范围下的误导性 AGREE」:Codex 若只看到部分材料须置 `truncated=true` 并写明范围;命令在收敛输出时会据此标注「非完整签核」。
+>
+> **P0(v0.4.0 起,§12)**:`remaining_issues[].id` 给每条 issue 一个**稳定 point_id**;`candidate_dispositions[] = {id, disposition: confirmed|rejected}` 让 Codex 对增量里 Claude 列出的每个 candidate 结构化裁定(首轮空数组),使 candidate→agreed 晋升不再靠从自由文本 `rationale` 猜。**注意:`state`(open/candidate/agreed/merged)与血缘(parent/merged)是 Claude 侧账本(由 P2 `review-state.mjs` 维护),不进 Codex 输出 schema**——Codex 不拥有状态,只输出 id 与对 candidate 的裁定事件。
 
 ```json
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "remaining_issues", "rationale", "truncated", "reviewed_scope", "assumptions"],
+  "required": ["verdict", "remaining_issues", "candidate_dispositions", "rationale", "truncated", "reviewed_scope", "assumptions"],
   "properties": {
     "verdict": { "type": "string", "enum": ["AGREE", "CHANGES"] },
     "remaining_issues": {
@@ -176,11 +178,24 @@ Codex 是对抗式的,若每轮失忆重读,可能反复重提已被说服的点
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["title", "detail", "severity"],
+        "required": ["id", "title", "detail", "severity"],
         "properties": {
+          "id": { "type": "string" },
           "title": { "type": "string" },
           "detail": { "type": "string" },
           "severity": { "type": "string", "enum": ["blocker", "major", "minor"] }
+        }
+      }
+    },
+    "candidate_dispositions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "disposition"],
+        "properties": {
+          "id": { "type": "string" },
+          "disposition": { "type": "string", "enum": ["confirmed", "rejected"] }
         }
       }
     },
@@ -271,8 +286,9 @@ LLM 循环难做单元测试,采用:
 
 > 以下为**设计层面已收敛**的改进方向,尚未实现。优先级与语义经对抗式互审锁定。
 
-- **P0 结构化协议(P2 的前置)**:扩展 `verdict.schema.json`——每个要点用统一 `point_id`(贯穿全生命周期),`state ∈ {open, candidate, agreed, merged}`(持久),`candidate_dispositions[] = {id, disposition: confirmed|rejected}`(**事件**,非状态),血缘 `parent_id / merged_from / merged_into`;`rejected` 必有同 `point_id` 的 remaining_issue 承载理由。覆盖/未知ID/跨轮稳定/状态机不变量由 **review-state validator** 校验(非靠 JSON Schema)。strict 模式下关系字段用 null/[] 表达不存在。
-  - 状态迁移:`open`─(Claude 采纳修订)→`candidate`─(Codex confirmed)→`agreed`;`candidate`─(Codex rejected)→`open`;`agreed`─(Codex 重新质疑)→`open`;point─(合并)→`merged`(终态,记 `merged_into`,不再独立流转)。
+- **P0 结构化协议(P2 的前置)— ✅ 已实现(v0.4.0)**:`verdict.schema.json` 已加 `remaining_issues[].id`(稳定 point_id)+ `candidate_dispositions[] = {id, disposition: confirmed|rejected}`(**事件**,非状态,首轮空数组);`codex-round.mjs` 已透传这两个字段(冒烟曾发现并修复其被 cherry-pick 丢弃);`review.md` 已指示 Codex 产出 id/dispositions 并据此晋升;`rejected` 的点用同一 id 留在 remaining_issues。真机两轮 dogfood 验证 confirmed/rejected + id 跨轮稳定。
+  - **仍属 P2(未做)**:`state ∈ {open, candidate, agreed, merged}`(持久)、血缘 `parent_id/merged_from/merged_into`、覆盖/未知ID/稳定性/状态机不变量校验——这些是 **Claude 侧账本**,由 `review-state.mjs` 维护,**不进 Codex 输出 schema**(Codex 不拥有状态)。
+  - 状态迁移(P2 的 reducer 实现):`open`─(Claude 采纳修订)→`candidate`─(Codex confirmed)→`agreed`;`candidate`─(Codex rejected)→`open`;`agreed`─(Codex 重新质疑)→`open`;point─(合并)→`merged`(终态,记 `merged_into`,不再独立流转)。
 - **P1 dogfood 度量(数据驱动后续优先级)**:每轮 Claude 标注**互斥主类** `new|repeat` + **正交标签** `revision-induced`(贴 new)/`stuck`(贴 repeat);`confirmed/rejected` 单独计数;包装器记每轮 wall-clock(token 据实可选)。≥3 个真实任务取样。
 - **P2 `review-state.mjs`(无状态纯函数,守 §1/§2)**:只做 `reduce`(状态+command 传入的语义决策→新状态)/`validate`(状态机不变量)/`render`(进度行、四段输出);**接收 `codex-round.mjs` 的结构化结果,不重复解析 stdout、不持久化、不驱动循环**。命名不暗示 driver。
 - **P3 首轮遗漏检查实验**:第 1 轮追加**一次**"针对当前证据与目标的遗漏检查"(**不**预判投机二阶问题、**不**输出 completeness 自评分)。A/B:同任务等额轮数预算配对运行、**纳入 UNRESOLVED 样本**、未收敛率作门禁指标、相同预算快照统一比较(converged/有效issue/噪音/Σwall-clock);"有效 issue" 须经**盲评或固定 rubric 终局复核**(仅"被采纳"不算),并记反向指标"不必要修订"。质量优先决策规则。

@@ -107,6 +107,7 @@ function main() {
     thread_id: threadId,
     verdict: verdict.verdict,
     remaining_issues: verdict.remaining_issues || [],
+    candidate_dispositions: verdict.candidate_dispositions || [],
     rationale: verdict.rationale || '',
     truncated: !!verdict.truncated,
     reviewed_scope: verdict.reviewed_scope || '',

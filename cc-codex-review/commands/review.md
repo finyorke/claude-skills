@@ -66,7 +66,9 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 并评估上面「Claude 当前主张」是否成立——Claude 的主张只是一个输入,不要默认它对。
 有任何实质疑虑就给 verdict=CHANGES;不要为了收敛而同意。
 优先质疑(按本次评审模式选取,见顶部「适用模式与边界」):实现路径、设计取舍、假设是否成立、需求是否完整覆盖、有无潜藏 bug、边界用例、论点/证据是否充分。
-按提供的 JSON Schema 输出全部字段:verdict / remaining_issues / rationale / truncated / reviewed_scope / assumptions。
+按提供的 JSON Schema 输出全部字段:verdict / remaining_issues / candidate_dispositions / rationale / truncated / reviewed_scope / assumptions。
+- `remaining_issues[].id`:每条 issue 一个**稳定短 id**(如 `I1`/`I2`)。**新** issue 自取一个本次评审内唯一的 id;若是续审/重提**增量里已带 id 的点**(见下),**复用原 id**,不要换新。
+- `candidate_dispositions`:针对**增量里 Claude 列出的每个 candidate(按其 id)**给出裁定 `{id, disposition}`,`disposition ∈ {confirmed(认可该修订、不再质疑), rejected(仍不接受)}`。**首轮无 candidate 时输出空数组 `[]`**;不得引用未在增量中出现的 id;每个被列出的 candidate 都要给一条(不可遗漏)。`rejected` 的点应同时在 `remaining_issues` 里(用同一 id)给出仍存在的理由。
 - `truncated`:若你只看到了材料/改动的一部分(被摘要、截断、或仅 diff 片段),置 true。
 - `reviewed_scope`:一句话说明你实际审了什么范围(如「仅 packet 内摘要,未读全量 diff」)。
 - `assumptions`:你为得出结论而做的假设(如「假设测试通过」)。
@@ -85,7 +87,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 维护 `thread_id`(初始空)、`round=0`、`prev`(上一轮的 issue 摘要,初始空)、`agreed`(**已达成一致清单**,初始空)、`candidate`(**候选共识清单**,初始空)。
 - **两级晋升,防止把未经双方确认的点当成"已定结论"**:
   - 当你本轮**采纳并修订**了某条 issue → 该点先进 `candidate`(候选:你已让步,但 Codex 尚未复核你的修订)。每条 candidate 记为结构化条目:`{id(稳定,如 C1/C2…), 来源 issue 严重度(blocker/major/minor), 修订摘要, 待 Codex 确认的点}`——**id 跨轮稳定不变**,便于逐条追踪确认/拒绝/撤销。
-  - **晋升须 Codex 明确确认**:在下一轮增量里**逐条列出未决 candidate(带 id)请 Codex 确认**;仅当 Codex **明确表示该点已解决/不再质疑**才晋升到 `agreed`(已确认)。**「该 issue 这轮没再出现」不算确认**(可能只是被遗漏、改名或关注点转移),不得据此晋升。Codex 明确拒绝 → 退回 `❌ 仍未达成一致`。
+  - **晋升须 Codex 明确确认(用结构化 `candidate_dispositions`,不靠猜)**:在下一轮增量里**逐条列出未决 candidate(带 id)请 Codex 确认**;Codex 在 `candidate_dispositions` 里对每个 id 回 `confirmed` 才晋升到 `agreed`,回 `rejected` 则**退回 `❌`**。**「该 id 这轮没出现在 dispositions 里」不算确认**(按协议 Codex 须覆盖全部,缺失视为协议异常,不得据此晋升)。
   - **可撤销(方向要对)**:若已晋升的 `agreed` 点在后续轮又被 Codex 重新质疑 → 此时双方已重新对峙,**退回 `❌ 仍未达成一致`**(不是退回 candidate);仅当 Claude 接受该质疑并完成**新修订**后,才再次进入 `candidate`。
   - **完整状态机**:`❌` ──(Claude 采纳并修订)──▶ `🔶 candidate` ──(Codex 明确确认)──▶ `✅ agreed`;`🔶` ──(Codex 明确拒绝)──▶ `❌`;`✅` ──(Codex 重新质疑)──▶ `❌`。任何"消失/沉默"都不构成状态迁移。
 - 只有 `agreed`(已确认)才计入 §7 的「✅ 已达成一致」;`candidate` 不算"已定结论"。仅记双方实质都接受的点,勿充数。
@@ -104,7 +106,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 3. 解析脚本 stdout 的那行 JSON:
    - `error=codex_unavailable` → 告诉用户运行 `/codex:setup`,**停止**。
    - `error=bad_verdict` → 已重试仍失败;把 `raw_message` + `codex_exit` + `stdout_tail`/`stderr_tail`(含 codex 的 error/turn.failed 事件)给用户帮助排查,**停止**。
-   - 成功:记下 `thread_id`、`verdict`、`remaining_issues`、`truncated`、`reviewed_scope`、`assumptions`。
+   - 成功:记下 `thread_id`、`verdict`、`remaining_issues`(含各条 `id`)、`candidate_dispositions`、`truncated`、`reviewed_scope`、`assumptions`。
 4. **打印进度行**:`第 N 轮 · Codex=<verdict> · 剩 <k> issue(<b> blocker) · Claude=<同意/持异议>`。
 5. 处理:
    - 若 Codex=CHANGES:对**每条 issue** 要么采纳并修订你的主张,要么带理由反驳(写下你的理由)。更新你的主张。
