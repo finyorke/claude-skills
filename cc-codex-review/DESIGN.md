@@ -235,8 +235,9 @@ cc-codex-review/
   .claude-plugin/plugin.json        # name, version, description, author
   commands/review.md                # 命令体 = Claude 执行的互审协议
   scripts/codex-round.mjs           # 单轮 Codex 调用原语(确定性,可单测)
+  scripts/review-state.mjs          # 共识账本无状态 reducer/validator/render(P2,§12)
   schemas/verdict.schema.json        # verdict 结构化输出 schema(strict 模式)
-  tests/                            # codex-round 单测 + 假 codex + schema strict 守护
+  tests/                            # codex-round / review-state 单测 + 假 codex + schema strict 守护
   README.md / DESIGN.md             # 文档(PLAN.md 已于 v0.3.0 移除,历史见 git log)
 ```
 
@@ -290,7 +291,7 @@ LLM 循环难做单元测试,采用:
   - **仍属 P2(未做)**:`state ∈ {open, candidate, agreed, merged}`(持久)、血缘 `parent_id/merged_from/merged_into`、覆盖/未知ID/稳定性/状态机不变量校验——这些是 **Claude 侧账本**,由 `review-state.mjs` 维护,**不进 Codex 输出 schema**(Codex 不拥有状态)。
   - 状态迁移(P2 的 reducer 实现):`open`─(Claude 采纳修订)→`candidate`─(Codex confirmed)→`agreed`;`candidate`─(Codex rejected)→`open`;`agreed`─(Codex 重新质疑)→`open`;point─(合并)→`merged`(终态,记 `merged_into`,不再独立流转)。
 - **P1 dogfood 度量(数据驱动后续优先级)**:每轮 Claude 标注**互斥主类** `new|repeat` + **正交标签** `revision-induced`(贴 new)/`stuck`(贴 repeat);`confirmed/rejected` 单独计数;包装器记每轮 wall-clock(token 据实可选)。≥3 个真实任务取样。
-- **P2 `review-state.mjs`(无状态纯函数,守 §1/§2)**:只做 `reduce`(状态+command 传入的语义决策→新状态)/`validate`(状态机不变量)/`render`(进度行、四段输出);**接收 `codex-round.mjs` 的结构化结果,不重复解析 stdout、不持久化、不驱动循环**。命名不暗示 driver。
+- **P2 `review-state.mjs`(无状态纯函数,守 §1/§2)— ✅ 已实现(v0.5.0)**:导出 `reduce`(上一轮 state + 语义决策 adopted/dispositions/merges → 新 state,纯函数不改入参)/`validate`(id 唯一、合并完整性、disposition 覆盖与未知 id)/`canConverge`(candidate 非空即拒,防假 RESOLVED)/`renderUnresolved`(四段块)/`counts`,并配薄 CLI(stdin JSON → stdout JSON)。**接收 codex-round.mjs 的结构化结果、不重复解析 stdout、不持久化、不驱动循环**;状态机全部迁移由它据传入语义决策施加。17 条单测覆盖全部迁移/不变量/收敛/渲染;review.md §6 已挂为可委托 helper。**这把 P0 留给 P2 的 state/血缘/validator 全部补齐。**
 - **P3 首轮遗漏检查实验**:第 1 轮追加**一次**"针对当前证据与目标的遗漏检查"(**不**预判投机二阶问题、**不**输出 completeness 自评分)。A/B:同任务等额轮数预算配对运行、**纳入 UNRESOLVED 样本**、未收敛率作门禁指标、相同预算快照统一比较(converged/有效issue/噪音/Σwall-clock);"有效 issue" 须经**盲评或固定 rubric 终局复核**(仅"被采纳"不算),并记反向指标"不必要修订"。质量优先决策规则。
 - **P4 多视角复核**:**暂缓**——聚合/去重/冲突裁决/每镜头 candidate 状态/成本上限/收敛语义未定义,且与 §1 YAGNI 有张力。
 
