@@ -44,16 +44,33 @@ function applyIssues(m, issues = []) {
     else { if (it.severity) p.severity = it.severity; if (it.title) p.title = it.title; if (it.detail) p.detail = it.detail; if (p.state === 'agreed') p.state = 'open'; }
   }
 }
+function freshCandidateMeta(p, extra = {}) {
+  const meta = { ...(p.meta || {}) };
+  delete meta.revision_summary; delete meta.pending; delete meta.response_type; delete meta.rebuttal; // 清除上一次采纳/反驳遗留的候选元数据(修 RS-P2-009 / RS-P2-META)
+  return { ...meta, ...extra };
+}
 function applyAdopted(m, adopted = []) {
   for (const a of normAdopted(adopted)) {
     const p = m.get(a.id);
     if (p && p.state === 'open') {
       p.state = 'candidate';
-      const meta = { ...(p.meta || {}) };
-      delete meta.revision_summary; delete meta.pending; // 清除上一次采纳遗留的候选元数据,防被拒的旧修订被当成当前提案(修 RS-P2-009)
-      if (a.revision_summary) meta.revision_summary = a.revision_summary;
-      if (a.pending) meta.pending = a.pending;
-      p.meta = meta;
+      const extra = { response_type: 'revision' };
+      if (a.revision_summary) extra.revision_summary = a.revision_summary;
+      if (a.pending) extra.pending = a.pending;
+      p.meta = freshCandidateMeta(p, extra);
+    }
+  }
+}
+// Claude 反驳一个 open issue(不采纳)→ 也进 candidate,等 Codex 裁定:
+// confirmed = Codex 接受反驳(该点了结)→ agreed;rejected = Codex 重申 → 回 open(修 RS-P2-OPEN)。
+function applyRebutted(m, rebutted = []) {
+  for (const a of normAdopted(rebutted)) {
+    const p = m.get(a.id);
+    if (p && p.state === 'open') {
+      p.state = 'candidate';
+      const extra = { response_type: 'rebuttal' };
+      if (a.rebuttal) extra.rebuttal = a.rebuttal;
+      p.meta = freshCandidateMeta(p, extra);
     }
   }
 }
@@ -78,6 +95,7 @@ export function reduce(prevState, round) {
   applyDispositions(m, r.candidate_dispositions);
   applyIssues(m, r.remaining_issues);
   applyAdopted(m, r.adopted);
+  applyRebutted(m, r.rebutted);
   applyMerges(m, r.merges);
   applyAnnotations(m, r.annotations);
   return { round: (prevState.round || 0) + 1, points: [...m.values()] };
@@ -92,11 +110,9 @@ export function validateRound(prevState, round) {
   const disp = r.candidate_dispositions || [];
   const issueIds = new Set((r.remaining_issues || []).map((it) => it.id));
 
-  // 数组内 id 唯一:Map 入账会把同 id 不同 issue 合并、adopted 静默忽略后续,丢数据(修 RS-P2-008)。
+  // 数组内 id 唯一:Map 入账会把同 id 不同 issue 合并(修 RS-P2-008)。adopted 去重在下方 (b) 与 open 检查合并处理(避免重复报错,修 RS-P2-DUPERR)。
   const riSeen = new Set();
   for (const it of r.remaining_issues || []) { if (riSeen.has(it.id)) errors.push(`remaining_issues 含重复 id: ${it.id}`); riSeen.add(it.id); }
-  const adSeen = new Set();
-  for (const a of normAdopted(r.adopted)) { if (adSeen.has(a.id)) errors.push(`adopted 含重复 id: ${a.id}`); adSeen.add(a.id); }
 
   // (a) disposition 协议:覆盖 prevCandidate、只引用 prevCandidate、无重复、值合法、矛盾。
   const dispSet = new Set();
@@ -116,14 +132,31 @@ export function validateRound(prevState, round) {
   const mid = cloneMap(prevState);
   applyDispositions(mid, disp);
   applyIssues(mid, r.remaining_issues);
+  const adoptedIds = normAdopted(r.adopted).map((a) => a.id);
+  const adSeen2 = new Set();
   for (const a of normAdopted(r.adopted)) {
+    if (adSeen2.has(a.id)) errors.push(`adopted 含重复 id: ${a.id}`);
+    adSeen2.add(a.id);
     const p = mid.get(a.id);
     if (!p) errors.push(`adopted 引用未知 id: ${a.id}`);
     else if (p.state !== 'open') errors.push(`adopted 只能作用于 open,但 ${a.id} 在本轮中间态 state=${p.state}`);
   }
-
-  // (c) 在 adopted 之后的中间态上**逐个**检查 merges(修 RS-P2-002:同批 A→B+B→C、A→B+A→C 都能被抓)。
   applyAdopted(mid, r.adopted);
+
+  // (b2) rebutted(Claude 反驳)也作用于 open,且不得与 adopted 同 id(修 RS-P2-OPEN)。
+  const adoptedSet = new Set(adoptedIds);
+  const rbSeen = new Set();
+  for (const a of normAdopted(r.rebutted)) {
+    if (rbSeen.has(a.id)) errors.push(`rebutted 含重复 id: ${a.id}`);
+    rbSeen.add(a.id);
+    if (adoptedSet.has(a.id)) errors.push(`同一 id 不能同轮既 adopted 又 rebutted: ${a.id}`);
+    const p = mid.get(a.id);
+    if (!p) errors.push(`rebutted 引用未知 id: ${a.id}`);
+    else if (p.state !== 'open') errors.push(`rebutted 只能作用于 open,但 ${a.id} 在本轮中间态 state=${p.state}`);
+  }
+  applyRebutted(mid, r.rebutted);
+
+  // (c) 在 adopted/rebutted 之后的中间态上**逐个**检查 merges(修 RS-P2-002:同批 A→B+B→C、A→B+A→C 都能被抓)。
   for (const mg of r.merges || []) {
     const into = mid.get(mg.into);
     if (!into) errors.push(`merge into 未知 id: ${mg.into}`);
@@ -156,7 +189,7 @@ export function validateRound(prevState, round) {
   return { ok: errors.length === 0, errors };
 }
 
-// 纯函数:state 结构不变量(id 唯一、合法 state、合并图双向 reciprocity 且目标为活跃点、parent 无环)。
+// 纯函数:state 结构不变量(id 唯一、合法 state、合并图双向 reciprocity 且目标为活跃点)。
 export function validateState(state) {
   const errors = [];
   const points = state.points || [];
@@ -186,21 +219,8 @@ export function validateState(state) {
       else if (fp.state !== 'merged' || fp.merged_into !== p.id) errors.push(`反向 reciprocity 不符:${p.id}.merged_from 含 ${fid},但 ${fid} 并未 merged 到 ${p.id}`);
     }
   }
-  // parent_id 环检测。
-  for (const p of points) {
-    if (!p.parent_id) continue;
-    if (p.parent_id === p.id) { errors.push(`point ${p.id} parent_id is itself`); continue; }
-    const seen = new Set([p.id]);
-    let cur = byId.get(p.parent_id);
-    while (cur) {
-      if (!byId.has(cur.id)) { errors.push(`point ${p.id} parent_id chain 含未知 id`); break; }
-      if (seen.has(cur.id)) { errors.push(`parent 环:涉及 ${cur.id}`); break; }
-      seen.add(cur.id);
-      if (!cur.parent_id) break;
-      cur = byId.get(cur.parent_id);
-    }
-    if (p.parent_id && !byId.has(p.parent_id)) errors.push(`point ${p.id} parent_id unknown: ${p.parent_id}`);
-  }
+  // 注:parent_id(拆分谱系)无 reduce 写入路径、实际未被使用,已按 YAGNI 剔除其校验(见 DESIGN §12)。
+  // 合并谱系由 merged_into/merged_from 表达并校验。
   return { ok: errors.length === 0, errors };
 }
 
@@ -247,13 +267,14 @@ export function renderUnresolved(state, meta = {}) {
   L.push('### ✅ 已达成一致(双方已确认,可视为已定结论)');
   L.push(agreed.length ? agreed.map((p) => `- [${p.id}] ${p.title}`).join('\n') : '无——双方自始至终未就任何要点达成一致');
   L.push('');
-  L.push('### 🔶 待复核确认(Claude 已让步,Codex 尚未确认 —— 不算定论)');
+  L.push('### 🔶 待复核确认(Claude 已回应:修订或反驳,Codex 尚未确认 —— 不算定论)');
   L.push(candidate.length
     ? candidate.map((p) => {
         const mm = p.meta || {};
-        const rev = mm.revision_summary ? ` · 修订:${mm.revision_summary}` : '';
+        const kind = mm.response_type === 'rebuttal' ? '反驳' : (mm.response_type === 'revision' ? '修订' : '待确认');
+        const body = mm.rebuttal ? ` · 反驳:${mm.rebuttal}` : (mm.revision_summary ? ` · 修订:${mm.revision_summary}` : '');
         const pend = mm.pending ? ` · 待确认:${mm.pending}` : '';
-        return `- [${p.id}] ${p.title}(来源严重度:${p.severity}${rev}${pend})`;
+        return `- [${p.id}] ${p.title}(${kind} · 来源严重度:${p.severity}${body}${pend})`;
       }).join('\n')
     : '无');
   L.push('');

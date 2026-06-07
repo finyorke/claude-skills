@@ -49,6 +49,30 @@ function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
 }
 
+// schema 是 strict、required 覆盖全部字段。合规的 verdict 必须满足完整结构(缺/类型错即协议异常,
+// 见 RS-P0-BOUNDARY):枚举 verdict、三个数组(含 item 形状)、rationale/reviewed_scope 字符串、truncated 布尔。
+const SEV = new Set(['blocker', 'major', 'minor']);
+const V_KEYS = ['verdict', 'remaining_issues', 'candidate_dispositions', 'rationale', 'truncated', 'reviewed_scope', 'assumptions'];
+const ISSUE_KEYS = ['id', 'title', 'detail', 'severity'];
+const DISP_KEYS = ['id', 'disposition'];
+// 精确键集:对应 schema 的 additionalProperties:false——不多不少(修 RS-P0-EXTRA)。
+function exactKeys(o, keys) {
+  if (!o || typeof o !== 'object') return false;
+  const k = Object.keys(o);
+  return k.length === keys.length && keys.every((x) => Object.prototype.hasOwnProperty.call(o, x));
+}
+function isValidVerdict(v) {
+  if (!exactKeys(v, V_KEYS)) return false;
+  if (v.verdict !== 'AGREE' && v.verdict !== 'CHANGES') return false;
+  if (typeof v.rationale !== 'string' || typeof v.reviewed_scope !== 'string' || typeof v.truncated !== 'boolean') return false;
+  if (!Array.isArray(v.assumptions) || !v.assumptions.every((x) => typeof x === 'string')) return false;
+  if (!Array.isArray(v.remaining_issues) || !v.remaining_issues.every((it) =>
+    exactKeys(it, ISSUE_KEYS) && typeof it.id === 'string' && typeof it.title === 'string' && typeof it.detail === 'string' && SEV.has(it.severity))) return false;
+  if (!Array.isArray(v.candidate_dispositions) || !v.candidate_dispositions.every((d) =>
+    exactKeys(d, DISP_KEYS) && typeof d.id === 'string' && (d.disposition === 'confirmed' || d.disposition === 'rejected'))) return false;
+  return true;
+}
+
 function main() {
   const a = parseArgs(process.argv.slice(2));
   if (!a.schema || !a.out) {
@@ -89,10 +113,13 @@ function main() {
       rawMsg = readFileSync(a.out, 'utf8').trim();
       try { verdict = JSON.parse(rawMsg); } catch { verdict = null; }
     }
-    if (verdict && (verdict.verdict === 'AGREE' || verdict.verdict === 'CHANGES')) break;
+    if (isValidVerdict(verdict)) break;
   }
 
-  if (!verdict || (verdict.verdict !== 'AGREE' && verdict.verdict !== 'CHANGES')) {
+  // schema 是 strict、required 覆盖全部字段;若解析出的 verdict 缺这些 required 结构(枚举错、
+  // remaining_issues / candidate_dispositions / assumptions 非数组),说明产出不合协议——
+  // 视为 bad_verdict 而非静默默认成空,避免把协议异常报成功(修 RS-P0-BOUNDARY)。
+  if (!isValidVerdict(verdict)) {
     emit({
       ok: false, error: 'bad_verdict', thread_id: threadId, raw_message: rawMsg,
       codex_exit: lastStatus,
@@ -106,12 +133,12 @@ function main() {
     ok: true,
     thread_id: threadId,
     verdict: verdict.verdict,
-    remaining_issues: verdict.remaining_issues || [],
-    candidate_dispositions: verdict.candidate_dispositions || [],
+    remaining_issues: verdict.remaining_issues,
+    candidate_dispositions: verdict.candidate_dispositions,
     rationale: verdict.rationale || '',
     truncated: !!verdict.truncated,
     reviewed_scope: verdict.reviewed_scope || '',
-    assumptions: verdict.assumptions || [],
+    assumptions: verdict.assumptions,
   });
 }
 

@@ -87,20 +87,20 @@
    - 若 `CHANGES`:Claude 对**每条 issue** 要么**采纳并修订主张**,要么**带理由反驳**;更新主张;给出本轮自己的 verdict。
    - 若 `AGREE`:Claude 检查自己是否也已无异议。
    - **每轮打印一行进度**:`第 N 轮 · Codex=CHANGES · 剩 3 issue(1 blocker) · Claude=持异议`,让用户能看着进度决定是否打断(无硬上限时这是人工兜底的前提)。
-5. **双 AGREE 闸门**:**仅当 `Codex.verdict == AGREE` 且 Claude 主动确认无异议**才结束循环。Codex 在「本轮已列全未决 candidate」前提下给 AGREE = 对这些 candidate 的整体确认(全部晋升 agreed);**收敛时 candidate 必为空**,否则需补一轮列全 candidate 求确认,杜绝"AGREE 却隐藏未确认项"的假收敛。
+5. **双 AGREE 闸门**:**仅当 `Codex.verdict == AGREE` 且 Claude 主动确认无异议 且 candidate 与 open 均空**才结束循环。晋升**一律靠结构化 `candidate_dispositions` 的逐条 `confirmed`,verdict=AGREE 本身不隐式确认任何 candidate**(协议要求 Codex 每轮覆盖全部未决 candidate 的 disposition,故 AGREE 时它们必已被逐条 confirmed)。任一 candidate 未被 confirmed(rejected 或未覆盖)→ 不得收敛,杜绝假收敛。
 6. **终止条件**(任一):
    - 双 AGREE → 收敛成功。
    - 达到硬上限(默认 5,可由 `--max-rounds` 调整;`0`=不设)→ 未收敛,交人工裁决。
    - **停滞检测**:某轮 Claude 主张 + Codex 的 issue 与上一轮**实质无变化**(同样未决分歧原地重复)→ 暂停,交人工裁决。
    - 用户手动打断(当前会话是交互式,人即兜底)。
-   - 循环中 Claude 维护两级共识与状态机:`❌`──(Claude 采纳修订)──▶`🔶 candidate`──(Codex 明确确认)──▶`✅ agreed`;`🔶`──(Codex 拒绝)──▶`❌`;`✅`──(Codex 重新质疑)──▶`❌`(对峙,**非**退回 candidate)。"消失/沉默"不构成迁移。供未收敛时如实展示收敛成果,且不把未确认的当定论。
+   - 循环中 Claude 维护两级共识与状态机:`❌`──(Claude **采纳修订 adopted 或 带理由反驳 rebutted**)──▶`🔶 candidate`──(Codex confirmed)──▶`✅ agreed`;`🔶`──(Codex rejected)──▶`❌`;`✅`──(Codex 重新质疑)──▶`❌`(对峙,**非**退回 candidate);point──(合并)──▶`merged`(终态)。"消失/沉默"不构成迁移。供未收敛时如实展示收敛成果,且不把未确认的当定论。
 7. **输出**:收敛后 Claude 打印 `✅ 收敛结论` 块:商定的结论 + 后续行动的具体建议。
    未收敛时打印**结构化 UNRESOLVED 块**,顶部标注「评审范围(reviewed_scope)+ 关键假设(assumptions)」,最后一轮 `truncated=true` 时加非完整签核警告;主体含四段:
    - `✅ 已达成一致`:`agreed`(Codex 已确认)清单。
-   - `🔶 待复核确认`:`candidate`(Claude 已让步、Codex 未确认)清单 —— 既非定论也非对峙分歧。
+   - `🔶 待复核确认`:`candidate`(Claude 已回应:修订或反驳、Codex 未确认)清单 —— 既非定论也非对峙分歧。
    - `❌ 仍未达成一致`:每条卡点用**两个正交维度**标注 —— `状态`[固有局限 | 待补工作 | 待裁决分歧] + `影响严重度`[blocker | major | minor,复用 verdict 口径],外加影响后果 + 解决需要。
    - `📋 裁决建议`:按影响严重度排序;到顶时提示「到顶 ≠ 问题已穷尽,可调高 `--max-rounds` 继续」。
-   目的:让用户区分"地基已牢只差几处"与"全程在吵",并判断每条卡点的轻重缓急。诚实约束:`✅` 只列 Codex 已确认的点,Claude 单方让步进 `🔶`。
+   目的:让用户区分"地基已牢只差几处"与"全程在吵",并判断每条卡点的轻重缓急。诚实约束:`✅` 只列 Codex 已确认的点,Claude 已回应未确认的进 `🔶`。
 
 ## 5. 评审包结构
 
@@ -265,7 +265,7 @@ LLM 循环难做单元测试,采用:
 循环是 prompt 驱动,无自动化测试位;以下场景**人工**验收(改动 `commands/review.md` 后过一遍):
 
 - **max-rounds 解析**(均可用 `--dry-run` 眼检:它会回显 `effective_max` 及其来源,见 `commands/review.md` §5):① 不带 flag/不提轮数 → 默认 `effective_max=5`;② `--max-rounds 3` → 3;③ 指令含"最多 6 轮"无 flag → 6;④ flag 与自然语言并存 → flag 优先;⑤ `--max-rounds 0` → 无上限(仅靠停滞 + 人工);⑥ 非法值(负数 / 非整数 / 自然语言"0 轮")→ 报参数错误并停,**不**静默回退默认。
-- **candidate 生命周期**:⑦ Claude 采纳修订 → 进 `candidate`,**不**进 `agreed`;⑧ 下一轮 Codex 明确确认 → 晋升 `agreed`;⑨ issue 仅"这轮没出现"而无确认 → **不**晋升;⑩ 已晋升 `agreed` 点被重新质疑 → 退回 `❌`(非退回 candidate);⑩b Codex 在已列全 candidate 时给 AGREE → candidate 全部晋升、收敛时 candidate 为空。
+- **candidate 生命周期**:⑦ Claude 采纳修订(adopted)**或带理由反驳(rebutted)**→ 进 `candidate`,**不**进 `agreed`;⑧ 下一轮 Codex 在 `candidate_dispositions` 对该 id 给 `confirmed` → 晋升 `agreed`(反驳被 confirmed=Codex 接受反驳,该点了结);⑨ issue 仅"这轮没出现"而无 confirmed → **不**晋升;⑩ 已晋升 `agreed` 点被重新质疑 → 退回 `❌`(非退回 candidate);⑩b 晋升只认逐条 `confirmed`,`verdict=AGREE` 不隐式确认;收敛要求 candidate 与 open 均空。
 - **UNRESOLVED 输出**:⑪ 四段齐全(✅/🔶/❌/📋),`candidate` 落在 🔶 而非 ✅;⑫ 顶部含 reviewed_scope + assumptions;⑬ 最后一轮 truncated → 加非完整签核警告;⑭ 每条卡点同时有「状态」与「影响严重度」两维;⑮ 最后一轮刚采纳的修订 → 落 🔶「待复核确认」,不混入 ✅,也不重复进 ❌。
 
 ## 11. 开放点与实测结论(codex-cli 0.135.0)
@@ -283,15 +283,17 @@ LLM 循环难做单元测试,采用:
 - 插件 command 的实际调用名(`/cc-codex-review:review` 能否省略命名空间)—— 需安装后在 Claude Code 里确认。
 - 大材料的分块评审策略尚为「摘要 + truncated 标注」,未实现自动分块。
 
-## 12. 效果提升路线图(经 Claude×Codex 互审收敛,6 轮双 AGREE — 待实现)
+## 12. 效果提升路线图(经 Claude×Codex 互审收敛)
 
-> 以下为**设计层面已收敛**的改进方向,尚未实现。优先级与语义经对抗式互审锁定。
+> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0,v0.5.1 加固);P1 未开始;P3/P4 未做(P4 暂缓)**。优先级与语义经对抗式互审锁定。
 
-- **P0 结构化协议(P2 的前置)— ✅ 已实现(v0.4.0)**:`verdict.schema.json` 已加 `remaining_issues[].id`(稳定 point_id)+ `candidate_dispositions[] = {id, disposition: confirmed|rejected}`(**事件**,非状态,首轮空数组);`codex-round.mjs` 已透传这两个字段(冒烟曾发现并修复其被 cherry-pick 丢弃);`review.md` 已指示 Codex 产出 id/dispositions 并据此晋升;`rejected` 的点用同一 id 留在 remaining_issues。真机两轮 dogfood 验证 confirmed/rejected + id 跨轮稳定。
-  - **仍属 P2(未做)**:`state ∈ {open, candidate, agreed, merged}`(持久)、血缘 `parent_id/merged_from/merged_into`、覆盖/未知ID/稳定性/状态机不变量校验——这些是 **Claude 侧账本**,由 `review-state.mjs` 维护,**不进 Codex 输出 schema**(Codex 不拥有状态)。
-  - 状态迁移(P2 的 reducer 实现):`open`─(Claude 采纳修订)→`candidate`─(Codex confirmed)→`agreed`;`candidate`─(Codex rejected)→`open`;`agreed`─(Codex 重新质疑)→`open`;point─(合并)→`merged`(终态,记 `merged_into`,不再独立流转)。
+- **P0 结构化协议(P2 的前置)— ✅ 已实现(v0.4.0)**:`verdict.schema.json` 已加 `remaining_issues[].id`(稳定 point_id)+ `candidate_dispositions[] = {id, disposition: confirmed|rejected}`(**事件**,非状态,首轮空数组);`codex-round.mjs` 已透传这两个字段(冒烟曾发现并修复其被 cherry-pick 丢弃;并收紧:缺 required 数组字段 → `bad_verdict` 不静默默认);`review.md` 已指示 Codex 产出 id/dispositions 并据此晋升;`rejected` 的点用同一 id 留在 remaining_issues。真机两轮 dogfood 验证 confirmed/rejected + id 跨轮稳定。
+  - `state ∈ {open, candidate, agreed, merged}`(持久)、合并血缘 `merged_from/merged_into`、覆盖/未知ID/状态机不变量校验属 **Claude 侧账本**,由 P2 `review-state.mjs` 维护,**不进 Codex 输出 schema**(Codex 不拥有状态)。
+  - **范围说明**:`parent_id`(拆分谱系)无实际用例、无 reduce 写入路径,已按 YAGNI 剔除(仅保留 merge 血缘)。id 跨轮稳定由 prompt 约束 + 数组内去重保障,未做强制的跨会话稳定性校验。
+  - 状态迁移(P2 reducer 实现):`open`─(adopted 采纳 / rebutted 反驳)→`candidate`─(Codex confirmed)→`agreed`;`candidate`─(Codex rejected)→`open`;`agreed`─(重新质疑)→`open`;point─(合并)→`merged`(终态)。**反驳路径(RS-P2-OPEN)**:Claude 反驳的 open issue 也进 candidate 待 Codex 裁定,confirmed=接受反驳→agreed,使"反驳成功"的点能了结、循环可收敛。
 - **P1 dogfood 度量(数据驱动后续优先级)**:每轮 Claude 标注**互斥主类** `new|repeat` + **正交标签** `revision-induced`(贴 new)/`stuck`(贴 repeat);`confirmed/rejected` 单独计数;包装器记每轮 wall-clock(token 据实可选)。≥3 个真实任务取样。
-- **P2 `review-state.mjs`(无状态纯函数,守 §1/§2)— ✅ 已实现(v0.5.0)**:导出 `reduce`(上一轮 state + 语义决策 adopted/dispositions/merges → 新 state,纯函数不改入参)/`validate`(id 唯一、合并完整性、disposition 覆盖与未知 id)/`canConverge`(candidate 非空即拒,防假 RESOLVED)/`renderUnresolved`(四段块)/`counts`,并配薄 CLI(stdin JSON → stdout JSON)。**接收 codex-round.mjs 的结构化结果、不重复解析 stdout、不持久化、不驱动循环**;状态机全部迁移由它据传入语义决策施加。单测覆盖全部迁移/不变量/收敛/渲染;review.md §6 已挂为可委托 helper。**这把 P0 留给 P2 的 state/血缘/validator 全部补齐。** v0.5.1 经 Codex 代码互审 6 轮、修复 9 个边界 bug(RS-P2-001..009:validator 拆 validateRound/validateState 按中间态校验、合并图链/环/双向 reciprocity/去重、merged 终态 zombie issue、annotation/数组 id 校验、候选元数据跨采纳清除、CLI pathToFileURL),review-state 单测增至 38 条(全套 52)。
+- **P2 `review-state.mjs`(无状态纯函数,守 §1/§2)— ✅ 已实现(v0.5.0)**:导出 `reduce`(上一轮 state + 语义决策 adopted/dispositions/merges → 新 state,纯函数不改入参)/`validate`(id 唯一、合并完整性、disposition 覆盖与未知 id)/`canConverge`(candidate 非空即拒,防假 RESOLVED)/`renderUnresolved`(四段块)/`counts`,并配薄 CLI(stdin JSON → stdout JSON)。**接收 codex-round.mjs 的结构化结果、不重复解析 stdout、不持久化、不驱动循环**;状态机全部迁移由它据传入语义决策施加。单测覆盖全部迁移/不变量/收敛/渲染;review.md §6 已将其设为**每轮必经管线**(见下「集成已闭合」)。**补齐了 P0 留给 P2 的 state + 合并血缘 + validator**(`parent_id` 拆分谱系按 YAGNI 不做,见 P0 范围说明)。v0.5.1 经 Codex 代码互审 6 轮、修复 9 个边界 bug(RS-P2-001..009:validator 拆 validateRound/validateState 按中间态校验、合并图链/环/双向 reciprocity/去重、merged 终态 zombie issue、annotation/数组 id 校验、候选元数据跨采纳清除、CLI pathToFileURL)。随后一次「完成度」互审又补:**反驳路径(RS-P2-OPEN,见上)**、`rebutted` 输入与校验、§6 取消"AGREE 隐式确认"改为一律靠结构化 disposition、codex-round 收紧 boundary、§12 状态修订、parent_id 剔除。review-state 单测增至约 40 条。
+  - **集成已闭合**:review.md §6 改为**每轮必经管线 `validate-round → reduce → validate-state → converge`**(不再"可委托"、不再散文手工记账);真机 E2E 已跑通——两轮真 codex 输出经 review-state CLI 驱动:采纳/反驳→candidate、Codex 裁定 confirmed/rejected→agreed/回 open、converge 闸门正确(rejected 回流后拒收敛);并加 hermetic 集成测试(canned verdict 跑完整管线 + "AGREE 但 candidate 未覆盖→拒收敛"),可重放。review-state 单测约 46 条(全套 56)。
 - **P3 首轮遗漏检查实验**:第 1 轮追加**一次**"针对当前证据与目标的遗漏检查"(**不**预判投机二阶问题、**不**输出 completeness 自评分)。A/B:同任务等额轮数预算配对运行、**纳入 UNRESOLVED 样本**、未收敛率作门禁指标、相同预算快照统一比较(converged/有效issue/噪音/Σwall-clock);"有效 issue" 须经**盲评或固定 rubric 终局复核**(仅"被采纳"不算),并记反向指标"不必要修订"。质量优先决策规则。
 - **P4 多视角复核**:**暂缓**——聚合/去重/冲突裁决/每镜头 candidate 状态/成本上限/收敛语义未定义,且与 §1 YAGNI 有张力。
 

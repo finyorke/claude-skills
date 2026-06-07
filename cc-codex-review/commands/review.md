@@ -86,15 +86,15 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ## 6. 互审循环
 维护 `thread_id`(初始空)、`round=0`、`prev`(上一轮的 issue 摘要,初始空)、`agreed`(**已达成一致清单**,初始空)、`candidate`(**候选共识清单**,初始空)。
 - **两级晋升,防止把未经双方确认的点当成"已定结论"**:
-  - 当你本轮**采纳并修订**了某条 issue → 该点先进 `candidate`(候选:你已让步,但 Codex 尚未复核你的修订)。每条 candidate 记为结构化条目:`{id(稳定,如 C1/C2…), 来源 issue 严重度(blocker/major/minor), 修订摘要, 待 Codex 确认的点}`——**id 跨轮稳定不变**,便于逐条追踪确认/拒绝/撤销。
+  - 当你本轮对某条 issue 作出回应——**采纳并修订(adopted)** 或 **带理由反驳(rebutted)**——该点先进 `candidate`(你已表态,但 Codex 尚未复核)。每条 candidate 记为结构化条目:`{id(稳定,如 C1/C2…), 来源 issue 严重度(blocker/major/minor), response_type(revision|rebuttal), 修订摘要 或 反驳理由, 待 Codex 确认的点}`——**id 跨轮稳定不变**。反驳的 candidate 被 Codex `confirmed`=接受反驳→该点了结(agreed);`rejected`=重申→回 open。
   - **晋升须 Codex 明确确认(用结构化 `candidate_dispositions`,不靠猜)**:在下一轮增量里**逐条列出未决 candidate(带 id)请 Codex 确认**;Codex 在 `candidate_dispositions` 里对每个 id 回 `confirmed` 才晋升到 `agreed`,回 `rejected` 则**退回 `❌`**。**「该 id 这轮没出现在 dispositions 里」不算确认**(按协议 Codex 须覆盖全部,缺失视为协议异常,不得据此晋升)。
-  - **可撤销(方向要对)**:若已晋升的 `agreed` 点在后续轮又被 Codex 重新质疑 → 此时双方已重新对峙,**退回 `❌ 仍未达成一致`**(不是退回 candidate);仅当 Claude 接受该质疑并完成**新修订**后,才再次进入 `candidate`。
-  - **完整状态机**:`❌` ──(Claude 采纳并修订)──▶ `🔶 candidate` ──(Codex 明确确认)──▶ `✅ agreed`;`🔶` ──(Codex 明确拒绝)──▶ `❌`;`✅` ──(Codex 重新质疑)──▶ `❌`。任何"消失/沉默"都不构成状态迁移。
+  - **可撤销(方向要对)**:若已晋升的 `agreed` 点在后续轮又被 Codex 重新质疑 → 此时双方已重新对峙,**退回 `❌ 仍未达成一致`**(不是退回 candidate);仅当 Claude 再次**回应**(采纳修订或带理由反驳)后,才再次进入 `candidate`。
+  - **完整状态机**:`❌` ──(Claude 采纳修订 adopted / 反驳 rebutted)──▶ `🔶 candidate` ──(Codex confirmed)──▶ `✅ agreed`;`🔶` ──(Codex rejected)──▶ `❌`;`✅` ──(Codex 重新质疑)──▶ `❌`;point ──(合并)──▶ `merged`(终态)。任何"消失/沉默"都不构成状态迁移。
 - 只有 `agreed`(已确认)才计入 §7 的「✅ 已达成一致」;`candidate` 不算"已定结论"。仅记双方实质都接受的点,勿充数。
-- **确定性记账可委托 `${CLAUDE_PLUGIN_ROOT}/scripts/review-state.mjs`**(无状态纯函数 helper,CLI 经 bash 调用,stdin JSON→stdout JSON):
+- **确定性记账每轮必经 `${CLAUDE_PLUGIN_ROOT}/scripts/review-state.mjs`**(无状态纯函数 helper,CLI 经 bash 调用,stdin JSON→stdout JSON)——不要在散文里手工维护 candidate/agreed,避免漏算/误判。每轮固定管线:**`validate-round`(reduce 前)→ `reduce` → `validate-state`(reduce 后)→ `converge`(判收敛)**;state 在本次循环内于各轮间传递。命令:
   - `validate-round`(在 `reduce` **之前**,对上一轮 state 校验本轮事件协议):disposition 覆盖全部 candidate、不引用未知/非 candidate、confirmed/rejected 与 remaining_issues 一致、adopted 只作用于 open、merge 前置态。**有 error 就先停、按协议异常处理,别带病 reduce。**
-  - `reduce`(`{prevState, round}`→新 state):把本轮语义决策(`adopted`/`candidate_dispositions`/`merges`/`annotations`)施加为状态迁移。
-  - `validate-state`(对 reduce 后的新 state):id 唯一、合并图双向 reciprocity 且无链/环、parent 无环等结构不变量。
+  - `reduce`(`{prevState, round}`→新 state):把本轮语义决策(`adopted`/`rebutted`/`candidate_dispositions`/`merges`/`annotations`)施加为状态迁移。
+  - `validate-state`(对 reduce 后的新 state):id 唯一、合并图双向 reciprocity 且目标为活跃点(无链/环)等结构不变量。
   - `converge`(`{state, codexVerdict, claudeAgree}`):收敛闸门——candidate / open 非空一律拒(防假 RESOLVED)。
   - `render-unresolved`(`{state, meta}`):出四段块。
   - state 只在本次循环内传递、不持久化(守 §1);语义决策与分歧标注(annotations)仍由你(Claude)给,脚本不自行判断(守 §2)。
@@ -115,11 +115,13 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
    - `error=bad_verdict` → 已重试仍失败;把 `raw_message` + `codex_exit` + `stdout_tail`/`stderr_tail`(含 codex 的 error/turn.failed 事件)给用户帮助排查,**停止**。
    - 成功:记下 `thread_id`、`verdict`、`remaining_issues`(含各条 `id`)、`candidate_dispositions`、`truncated`、`reviewed_scope`、`assumptions`。
 4. **打印进度行**:`第 N 轮 · Codex=<verdict> · 剩 <k> issue(<b> blocker) · Claude=<同意/持异议>`。
-5. 处理:
-   - 若 Codex=CHANGES:对**每条 issue** 要么采纳并修订你的主张,要么带理由反驳(写下你的理由)。更新你的主张。
+5. 处理:对**每条 open issue**二选一(两者都使该点进 `candidate`、等下一轮 Codex 裁定):
+   - **采纳并修订**(`adopted`,response_type=revision):接受该 issue,改你的主张。
+   - **带理由反驳**(`rebutted`,response_type=rebuttal):不接受,写下反驳理由。**反驳同样要走 candidate→Codex 裁定**:Codex `confirmed`=接受你的反驳(该点了结→`agreed`),`rejected`=重申(回 `open`)。这保证"反驳成功"的点也能被了结、从而能收敛(否则 open 永挂)。
    - 你给出本轮自己的立场:无任何剩余异议 → Claude=AGREE,否则 Claude=持异议。
-6. **双 AGREE 闸门**:仅当 `Codex.verdict==AGREE` 且你也 Claude=AGREE → 收敛,跳出。
-   - **AGREE 与 candidate 的关系**:Codex 在「本轮增量已逐条列出全部未决 candidate」的前提下返回 `AGREE`,**即视为对这些 candidate 的整体确认** → 把它们全部晋升 `agreed`。因此**收敛(RESOLVED)时 `candidate` 必为空**;若某轮 Codex 给了 AGREE 但你本轮**未**把未决 candidate 列全请其确认,则**不得收敛**,需再补一轮列全 candidate 求确认。这样杜绝"AGREE 收敛却仍隐藏未确认项"的假 RESOLVED。
+6. **双 AGREE 闸门(确认一律靠结构化 `candidate_dispositions`,无隐式确认)**:收敛当且仅当 `Codex.verdict==AGREE` 且 Claude=AGREE 且 **`candidate` 与 `open` 均为空**。
+   - 晋升只认 `candidate_dispositions` 里的逐条 `confirmed`;**`verdict=AGREE` 本身不隐式确认任何 candidate**(协议要求 Codex 每轮覆盖全部未决 candidate 的 disposition,故 AGREE 时它们必已被逐条 confirmed,无需"整体确认"这一冲突说法)。
+   - 任一 candidate 未被 `confirmed`(被 `rejected` 或未覆盖)→ **不得收敛**;未覆盖属协议异常(`validate-round` 会报),补一轮列全求裁定。杜绝"AGREE 却隐藏未确认项"的假 RESOLVED。
 7. **终止条件**(任一即停):
    - 双 AGREE → 收敛成功。
    - `effective_max != null` 且 `round >= effective_max` → **UNRESOLVED**(到顶未收敛)。
@@ -143,8 +145,8 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   ### ✅ 已达成一致(双方已确认,可视为已定结论)
   <逐条列出 `agreed`(已确认级)清单;Codex 已明确确认的点。若确实一条都没有,写"无——双方自始至终未就任何要点达成一致">
 
-  ### 🔶 待复核确认(Claude 已让步,Codex 尚未确认 —— 不算定论)
-  <逐条列出 `candidate`,每条带:id · 来源严重度[blocker/major/minor] · 修订摘要 · 待确认的点。
+  ### 🔶 待复核确认(Claude 已回应:修订或反驳,Codex 尚未确认 —— 不算定论)
+  <逐条列出 `candidate`,每条带:id · 来源严重度[blocker/major/minor] · response_type(修订/反驳)· 修订摘要 或 反驳理由 · 待确认的点。
    这些既非已确认共识、也非仍在对峙的分歧,需用户/下一轮复核确认。
    保留「来源严重度」是为了让用户知道——一条由 blocker 修订而来、却仍待确认的 candidate,其风险不应因转入此段而被埋没。若为空写"无">
 
@@ -162,7 +164,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   ```
   - **状态(解决路径)判定**:`固有局限`=任何方案都绕不开的理论/能力边界;`待补工作`=方向双方都认可、只是本次未纳入并复核的具体工作;`待裁决分歧`=双方仍各持立场的实质争议(方案取舍、事实判断、证据是否充分等),需用户拍板。注意:`固有局限` **不等于可无条件放行**——严重的仍须用户知情决策;放不放行由「影响严重度」决定,不由状态决定。
   - **影响严重度**:统一用 `blocker/major/minor`(与 schema、Codex verdict 同口径),不另立高/中/低。
-  - **诚实约束**:`已达成一致` 只写已晋升到 `agreed`(Codex 已确认)的点;Claude 单方让步但未经 Codex 确认的一律进 `🔶 待复核确认`,不得混入 `✅`。
+  - **诚实约束**:`已达成一致` 只写已晋升到 `agreed`(Codex 已确认)的点;Claude 已回应(采纳修订或反驳)但未经 Codex 确认的一律进 `🔶 待复核确认`,不得混入 `✅`。
 
 ## 注意
 - 只有真的无异议才输出 AGREE;不认同 Codex 就带理由反驳,而非投降。顺从式同意视为失败。

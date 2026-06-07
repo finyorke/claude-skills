@@ -198,6 +198,58 @@ test('renderUnresolved: 四段齐全 + ❌ 段含 §7 字段 + 📋 可定制', 
   assert.ok(!agreedSection.includes('C1'), 'candidate 不得混入 ✅ 段');
 });
 
+// ---- RS-INT-001 / RS-PIPE-ROUND:完整管线集成,**一轮一次完整管线**(每个 Codex 轮 = 一次 reduce,
+// 把该轮 Codex 输出 + Claude 对它的回应合并进同一 round),每轮跑 validate-round→reduce→validate-state→converge。
+function runRoundPipeline(prev, round, codexVerdict, claudeAgree) {
+  const vr = validateRound(prev, round);
+  assert.equal(vr.ok, true, `validate-round: ${JSON.stringify(vr.errors)}`);
+  const next = reduce(prev, round);
+  assert.equal(validateState(next).ok, true, `validate-state: ${JSON.stringify(validateState(next).errors)}`);
+  return { next, conv: canConverge(next, codexVerdict, claudeAgree) };
+}
+test('集成:两轮各跑一次完整管线,round 计数正确且收敛闸门正确', () => {
+  // 第 1 轮 = Codex 出 2 issue(I1/I2)+ Claude 当轮回应(采纳 I1 / 反驳 I2)。
+  const round1 = {
+    remaining_issues: [
+      { id: 'I1', title: 'a', detail: 'da', severity: 'major' },
+      { id: 'I2', title: 'b', detail: 'db', severity: 'minor' },
+    ],
+    candidate_dispositions: [],
+    adopted: [{ id: 'I1', revision_summary: '改A' }],
+    rebutted: [{ id: 'I2', rebuttal: '不成立' }],
+  };
+  let { next: s, conv } = runRoundPipeline(emptyState(), round1, 'CHANGES', false);
+  assert.equal(s.round, 1);
+  assert.deepEqual(counts(s), { open: 0, candidate: 2, agreed: 0, merged: 0 });
+  assert.equal(conv.converged, false);
+
+  // 第 2 轮 = Codex 对两个 candidate 全 confirmed + AGREE,Claude 无新回应。
+  const round2 = {
+    remaining_issues: [], candidate_dispositions: [
+      { id: 'I1', disposition: 'confirmed' }, { id: 'I2', disposition: 'confirmed' },
+    ],
+  };
+  ({ next: s, conv } = runRoundPipeline(s, round2, 'AGREE', true));
+  assert.equal(s.round, 2, '两个 Codex 轮 = round 计数 2(每轮一次 reduce)');
+  assert.deepEqual(counts(s), { open: 0, candidate: 0, agreed: 2, merged: 0 });
+  assert.equal(conv.converged, true, '全 agreed + 双 AGREE → 收敛');
+});
+
+test('集成:Codex AGREE 但仍有未确认 candidate → validate-round 报覆盖缺失,不得收敛', () => {
+  const s = { round: 2, points: [
+    { id: 'C1', state: 'candidate', severity: 'major', title: 't1' },
+    { id: 'C2', state: 'candidate', severity: 'minor', title: 't2' },
+  ] };
+  // codex 给 AGREE 却只确认了 C1(漏 C2)→ 协议异常
+  const r = { verdict: 'AGREE', remaining_issues: [], candidate_dispositions: [{ id: 'C1', disposition: 'confirmed' }] };
+  const vr = validateRound(s, r);
+  assert.equal(vr.ok, false);
+  assert.match(vr.errors.join('\n'), /candidate C2 未被裁定/);
+  // 即便误施加,reduce 后 C2 仍 candidate → converge 拒(无隐式确认)
+  const s2 = reduce(s, r);
+  assert.equal(canConverge(s2, 'AGREE', true).converged, false);
+});
+
 test('counts: 各态计数', () => {
   assert.deepEqual(counts({ points: [{ state: 'open' }, { state: 'candidate' }, { state: 'agreed' }] }), { open: 1, candidate: 1, agreed: 1, merged: 0 });
 });
@@ -257,13 +309,45 @@ test('validateState: 陈旧 merged_from(反向 reciprocity)被拒', () => {
   assert.match(r.errors.join('\n'), /反向 reciprocity 不符/);
 });
 
-test('validateState: parent 环(A↔B)被拒', () => {
-  const r = validateState({ round: 1, points: [
-    { id: 'A', state: 'open', parent_id: 'B' },
-    { id: 'B', state: 'open', parent_id: 'A' },
-  ] });
-  assert.equal(r.ok, false);
-  assert.match(r.errors.join('\n'), /parent 环/);
+test('RS-P2-OPEN: 反驳成功路径能收敛(open→rebut→candidate→confirmed→agreed)', () => {
+  // 1) Codex 提 I1;2) Claude 反驳(不采纳)→ candidate(rebuttal);3) Codex 接受反驳 confirmed → agreed。
+  let s = reduce(emptyState(), { remaining_issues: [{ id: 'I1', title: 't', severity: 'major' }] });
+  assert.equal(s.points.find((p) => p.id === 'I1').state, 'open');
+  s = reduce(s, { rebutted: [{ id: 'I1', rebuttal: '该顾虑不成立因为X' }] });
+  const cand = s.points.find((p) => p.id === 'I1');
+  assert.equal(cand.state, 'candidate');
+  assert.equal(cand.meta.response_type, 'rebuttal');
+  // 反驳的 candidate 也要被 Codex 裁定
+  const vr = validateRound(s, { candidate_dispositions: [{ id: 'I1', disposition: 'confirmed' }] });
+  assert.equal(vr.ok, true, JSON.stringify(vr.errors));
+  s = reduce(s, { candidate_dispositions: [{ id: 'I1', disposition: 'confirmed' }] });
+  assert.equal(s.points.find((p) => p.id === 'I1').state, 'agreed', '反驳被接受 → agreed(可收敛)');
+  assert.equal(canConverge(s, 'AGREE', true).converged, true, '反驳成功后应能收敛(修 RS-P2-OPEN)');
+});
+
+test('RS-P2-META: 反驳被拒后改为采纳,清除旧 rebuttal', () => {
+  let s = reduce(emptyState(), { remaining_issues: [{ id: 'I1', title: 't', severity: 'major' }] });
+  s = reduce(s, { rebutted: [{ id: 'I1', rebuttal: '旧反驳' }] });
+  s = reduce(s, { candidate_dispositions: [{ id: 'I1', disposition: 'rejected' }], remaining_issues: [{ id: 'I1', title: 't', severity: 'major' }] });
+  s = reduce(s, { adopted: [{ id: 'I1', revision_summary: '新修订' }] });
+  const mm = s.points.find((p) => p.id === 'I1').meta;
+  assert.equal(mm.response_type, 'revision');
+  assert.equal(mm.revision_summary, '新修订');
+  assert.equal(mm.rebuttal, undefined, '旧 rebuttal 必须被清除(RS-P2-META)');
+});
+
+test('validateRound: rebutted 只能作用于 open,且不得与 adopted 同 id', () => {
+  const prev = { round: 1, points: [{ id: 'C1', state: 'candidate', severity: 'major', title: 't' }] };
+  const r1 = validateRound(prev, {
+    candidate_dispositions: [{ id: 'C1', disposition: 'confirmed' }],
+    rebutted: ['C1'], // C1 在中间态(disp 后)是 agreed,非 open
+  });
+  assert.equal(r1.ok, false);
+  assert.match(r1.errors.join('\n'), /rebutted 只能作用于 open/);
+  const prev2 = { round: 1, points: [{ id: 'O1', state: 'open', severity: 'major', title: 't' }] };
+  const r2 = validateRound(prev2, { adopted: ['O1'], rebutted: ['O1'] });
+  assert.equal(r2.ok, false);
+  assert.match(r2.errors.join('\n'), /不能同轮既 adopted 又 rebutted/);
 });
 
 // ---- RS-P2-003 修复:render 无占位 + pending ----

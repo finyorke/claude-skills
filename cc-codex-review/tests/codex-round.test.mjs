@@ -40,7 +40,7 @@ function captureArgv(extraArgs, env = {}) {
 test('fresh round: returns ok with thread_id and AGREE verdict', () => {
   const res = runRound([], 'PACKET BODY', {
     MOCK_THREAD_ID: '019e1111-aaaa-7000-8000-000000000abc',
-    MOCK_VERDICT: JSON.stringify({ verdict: 'AGREE', remaining_issues: [], rationale: 'ok' }),
+    MOCK_VERDICT: JSON.stringify({ verdict: 'AGREE', remaining_issues: [], candidate_dispositions: [], rationale: 'ok', truncated: false, reviewed_scope: 'ok', assumptions: [] }),
   });
   assert.equal(res.ok, true);
   assert.equal(res.thread_id, '019e1111-aaaa-7000-8000-000000000abc');
@@ -80,7 +80,7 @@ test('resume round: actually succeeds against realistic mock (#6 regression)', (
   // realistic mock rejects -s/--cd under resume with exit 2; this only passes if the
   // script omits them on resume.
   const res = runRound(['--resume', '019e2222-bbbb-7000-8000-0000000def01'], 'DELTA', {
-    MOCK_VERDICT: JSON.stringify({ verdict: 'CHANGES', remaining_issues: [], rationale: 'more' }),
+    MOCK_VERDICT: JSON.stringify({ verdict: 'CHANGES', remaining_issues: [], candidate_dispositions: [], rationale: 'more', truncated: false, reviewed_scope: 's', assumptions: [] }),
   });
   assert.equal(res.ok, true);
   assert.equal(res.verdict, 'CHANGES');
@@ -109,7 +109,7 @@ test('bad verdict then good: retries once and succeeds', () => {
   const res = runRound([], 'PACKET', {
     MOCK_BAD_OUTPUT: '1',
     MOCK_COUNTER: counter,
-    MOCK_VERDICT: JSON.stringify({ verdict: 'CHANGES', remaining_issues: [{ title: 't', detail: 'd', severity: 'major' }], rationale: 'r' }),
+    MOCK_VERDICT: JSON.stringify({ verdict: 'CHANGES', remaining_issues: [{ id: 'I1', title: 't', detail: 'd', severity: 'major' }], candidate_dispositions: [], rationale: 'r', truncated: false, reviewed_scope: 's', assumptions: [] }),
   });
   assert.equal(res.ok, true);
   assert.equal(res.verdict, 'CHANGES');
@@ -147,7 +147,7 @@ test('bad_verdict surfaces stdout/stderr tails + exit code for diagnosis (#2)', 
 test('truncated / reviewed_scope / assumptions pass through to result (#3)', () => {
   const res = runRound([], 'PACKET', {
     MOCK_VERDICT: JSON.stringify({
-      verdict: 'AGREE', remaining_issues: [], rationale: 'ok',
+      verdict: 'AGREE', remaining_issues: [], candidate_dispositions: [], rationale: 'ok',
       truncated: true, reviewed_scope: 'only first 200 lines', assumptions: ['tests pass'],
     }),
   });
@@ -166,7 +166,7 @@ test('P0: issue id + candidate_dispositions pass through (no field-drop)', () =>
         { id: 'C1', disposition: 'confirmed' },
         { id: 'C2', disposition: 'rejected' },
       ],
-      rationale: 'r',
+      rationale: 'r', truncated: false, reviewed_scope: 's', assumptions: [],
     }),
   });
   assert.equal(res.ok, true);
@@ -177,9 +177,21 @@ test('P0: issue id + candidate_dispositions pass through (no field-drop)', () =>
   ], 'candidate_dispositions must pass through, not be dropped');
 });
 
-test('P0: candidate_dispositions defaults to [] when codex omits it', () => {
+test('RS-P0-BOUNDARY: 缺 required 数组字段(如 candidate_dispositions)→ bad_verdict,不静默默认', () => {
   const res = runRound([], 'PACKET', {
-    MOCK_VERDICT: JSON.stringify({ verdict: 'AGREE', remaining_issues: [], rationale: 'ok' }),
+    MOCK_VERDICT: JSON.stringify({ verdict: 'AGREE', remaining_issues: [], rationale: 'ok' }), // 缺 candidate_dispositions / assumptions
   });
-  assert.deepEqual(res.candidate_dispositions, []);
+  assert.equal(res.ok, false, '不合协议的 verdict 不得报成功');
+  assert.equal(res.error, 'bad_verdict');
+});
+
+test('RS-P0-EXTRA: 含额外字段(additionalProperties)→ bad_verdict', () => {
+  const res = runRound([], 'PACKET', {
+    MOCK_VERDICT: JSON.stringify({
+      verdict: 'AGREE', remaining_issues: [], candidate_dispositions: [], rationale: 'ok',
+      truncated: false, reviewed_scope: 's', assumptions: [], EXTRA: 'nope',
+    }),
+  });
+  assert.equal(res.ok, false, '额外顶层字段应被拒(schema 是 additionalProperties:false)');
+  assert.equal(res.error, 'bad_verdict');
 });
