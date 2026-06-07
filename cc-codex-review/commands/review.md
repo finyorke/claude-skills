@@ -91,7 +91,13 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   - **可撤销(方向要对)**:若已晋升的 `agreed` 点在后续轮又被 Codex 重新质疑 → 此时双方已重新对峙,**退回 `❌ 仍未达成一致`**(不是退回 candidate);仅当 Claude 接受该质疑并完成**新修订**后,才再次进入 `candidate`。
   - **完整状态机**:`❌` ──(Claude 采纳并修订)──▶ `🔶 candidate` ──(Codex 明确确认)──▶ `✅ agreed`;`🔶` ──(Codex 明确拒绝)──▶ `❌`;`✅` ──(Codex 重新质疑)──▶ `❌`。任何"消失/沉默"都不构成状态迁移。
 - 只有 `agreed`(已确认)才计入 §7 的「✅ 已达成一致」;`candidate` 不算"已定结论"。仅记双方实质都接受的点,勿充数。
-- **确定性记账可委托 `${CLAUDE_PLUGIN_ROOT}/scripts/review-state.mjs`**(无状态纯函数 helper):每轮把上一轮 state + 本轮语义决策(`adopted`/`candidate_dispositions`/`merges`)喂给 `reduce` 得新 state;用 `validate` 校验不变量与 disposition 覆盖;`converge` 判收敛闸门(candidate 非空即拒);`render-unresolved` 出四段块。state 只在本次循环内传递、不持久化(守 §1)。语义决策仍由你(Claude)给,脚本不自行判断。
+- **确定性记账可委托 `${CLAUDE_PLUGIN_ROOT}/scripts/review-state.mjs`**(无状态纯函数 helper,CLI 经 bash 调用,stdin JSON→stdout JSON):
+  - `validate-round`(在 `reduce` **之前**,对上一轮 state 校验本轮事件协议):disposition 覆盖全部 candidate、不引用未知/非 candidate、confirmed/rejected 与 remaining_issues 一致、adopted 只作用于 open、merge 前置态。**有 error 就先停、按协议异常处理,别带病 reduce。**
+  - `reduce`(`{prevState, round}`→新 state):把本轮语义决策(`adopted`/`candidate_dispositions`/`merges`/`annotations`)施加为状态迁移。
+  - `validate-state`(对 reduce 后的新 state):id 唯一、合并图双向 reciprocity 且无链/环、parent 无环等结构不变量。
+  - `converge`(`{state, codexVerdict, claudeAgree}`):收敛闸门——candidate / open 非空一律拒(防假 RESOLVED)。
+  - `render-unresolved`(`{state, meta}`):出四段块。
+  - state 只在本次循环内传递、不持久化(守 §1);语义决策与分歧标注(annotations)仍由你(Claude)给,脚本不自行判断(守 §2)。
 
 每轮:
 1. `round++`。

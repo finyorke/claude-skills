@@ -2,128 +2,210 @@
 // review-state.mjs — 互审「共识账本」的无状态纯函数 helper(路线图 P2,见 DESIGN §12)。
 //
 // 职责边界(守 DESIGN §1/§2):
-//   - 只做 reduce / validate / render 三件确定性的事。
-//   - **吃 codex-round.mjs 的结构化结果**(verdict + remaining_issues[].id + candidate_dispositions),
+//   - 只做 reduce / validate / render 三类确定性的事。
+//   - **吃 codex-round.mjs 的结构化结果**(verdict + remaining_issues[].{id,detail} + candidate_dispositions),
 //     绝不自己跑/解析 codex stdout。
 //   - **无状态**:每次调用把上一轮 state 传进来、新 state 传出去;不跨命令持久化到磁盘。
-//   - **不驱动循环**:"采纳/反驳/合并"这类语义判断由 Claude(command)每轮显式传入,本模块不自行决定。
+//   - **不驱动循环、不做语义判断**:"采纳/反驳/合并/分歧标注"由 Claude(command)每轮显式传入。
 //
 // point = 一个实质要点,按稳定 id 跟踪;state ∈ open | candidate | agreed | merged。
-// 状态迁移(全部由本模块据传入的语义决策施加):
-//   open ──(Claude 采纳修订: adopted)──▶ candidate
-//   candidate ──(Codex disposition=confirmed)──▶ agreed
-//   candidate ──(Codex disposition=rejected)──▶ open
-//   agreed ──(Codex 重新质疑: 重新出现在 remaining_issues)──▶ open
-//   point ──(合并: merges)──▶ merged(终态,记 merged_into;不再独立流转)
+// 状态迁移(由本模块据传入语义决策施加,顺序见 reduce):
+//   open ──(adopted)──▶ candidate ──(disposition confirmed)──▶ agreed
+//   candidate ──(disposition rejected)──▶ open ; agreed ──(重现于 remaining_issues)──▶ open
+//   point ──(merges)──▶ merged(终态,记 merged_into)
+import { pathToFileURL } from 'node:url';
 
 export const STATES = ['open', 'candidate', 'agreed', 'merged'];
+const DISPOSITIONS = ['confirmed', 'rejected'];
+const SEV_RANK = { blocker: 0, major: 1, minor: 2 };
 
-export function emptyState() {
-  return { round: 0, points: [] };
+export function emptyState() { return { round: 0, points: [] }; }
+
+function indexById(points) { const m = new Map(); for (const p of points) m.set(p.id, p); return m; }
+function normAdopted(adopted) { return (adopted || []).map((a) => (typeof a === 'string' ? { id: a } : a)); }
+function clonePoint(p) {
+  return { ...p, merged_from: p.merged_from ? [...p.merged_from] : undefined, meta: p.meta ? { ...p.meta } : undefined };
 }
+function cloneMap(prevState) { return indexById((prevState.points || []).map(clonePoint)); }
 
-function indexById(points) {
-  const m = new Map();
-  for (const p of points) m.set(p.id, p);
-  return m;
-}
-
-// 纯函数:给定上一轮 state + 本轮输入,算出新 state(不改入参)。
-// round = {
-//   verdict, remaining_issues:[{id,title,severity}], candidate_dispositions:[{id,disposition}],
-//   adopted:[id...],            // 本轮 Claude 采纳并修订 → 进 candidate(应为当前 open 的点)
-//   merges:[{from:[id...], into:id}]   // 可选:把 from 合并进 into
-// }
-export function reduce(prevState, round) {
-  const m = indexById((prevState.points || []).map((p) => ({ ...p })));
-  const r = round || {};
-  const dispositions = r.candidate_dispositions || [];
-  const issues = r.remaining_issues || [];
-  const adopted = r.adopted || [];
-  const merges = r.merges || [];
-
-  // 1) 先施加 Codex 对上一轮 candidate 的裁定(事件)。
+// ---- 可复用的步进施加器(对 Map 原地操作;reduce 与 validateRound 共享,避免逻辑漂移)----
+function applyDispositions(m, dispositions = []) {
   for (const d of dispositions) {
     const p = m.get(d.id);
-    if (!p) continue; // 未知 id 由 validate 兜底报错;reduce 不静默造点
+    if (!p || p.state !== 'candidate') continue; // 非 candidate/未知 → 协议错误由 validateRound 兜底
     if (d.disposition === 'confirmed') p.state = 'agreed';
     else if (d.disposition === 'rejected') p.state = 'open';
   }
-
-  // 2) 施加本轮 Codex 的 remaining_issues:新点入账(open);已 agreed 的点重新出现 = 被重新质疑 → open。
+}
+function applyIssues(m, issues = []) {
   for (const it of issues) {
     const p = m.get(it.id);
-    if (!p) {
-      m.set(it.id, { id: it.id, state: 'open', severity: it.severity || 'major', title: it.title || '' });
-    } else {
-      if (it.severity) p.severity = it.severity;
-      if (it.title) p.title = it.title;
-      if (p.state === 'agreed') p.state = 'open'; // 重新质疑
+    if (!p) m.set(it.id, { id: it.id, state: 'open', severity: it.severity || 'major', title: it.title || '', detail: it.detail || '' });
+    else { if (it.severity) p.severity = it.severity; if (it.title) p.title = it.title; if (it.detail) p.detail = it.detail; if (p.state === 'agreed') p.state = 'open'; }
+  }
+}
+function applyAdopted(m, adopted = []) {
+  for (const a of normAdopted(adopted)) {
+    const p = m.get(a.id);
+    if (p && p.state === 'open') {
+      p.state = 'candidate';
+      const meta = { ...(p.meta || {}) };
+      delete meta.revision_summary; delete meta.pending; // 清除上一次采纳遗留的候选元数据,防被拒的旧修订被当成当前提案(修 RS-P2-009)
+      if (a.revision_summary) meta.revision_summary = a.revision_summary;
+      if (a.pending) meta.pending = a.pending;
+      p.meta = meta;
     }
   }
-
-  // 3) 施加 Claude 本轮采纳(open → candidate)。
-  for (const id of adopted) {
-    const p = m.get(id);
-    if (p && p.state === 'open') p.state = 'candidate';
-  }
-
-  // 4) 施加合并(终态 merged)。
+}
+function applyMerges(m, merges = []) {
   for (const mg of merges) {
     const into = m.get(mg.into);
     if (!into) continue;
     into.merged_from = [...(into.merged_from || []), ...(mg.from || [])];
-    for (const fid of mg.from || []) {
-      const fp = m.get(fid);
-      if (fp) { fp.state = 'merged'; fp.merged_into = mg.into; }
-    }
+    for (const fid of mg.from || []) { const fp = m.get(fid); if (fp) { fp.state = 'merged'; fp.merged_into = mg.into; } }
   }
+}
+function applyAnnotations(m, annotations = []) {
+  for (const an of annotations) { const p = m.get(an.id); if (!p) continue; const { id, ...f } = an; p.meta = { ...(p.meta || {}), ...f }; }
+}
 
+// 纯函数:上一轮 state + 本轮输入 → 新 state(不改入参)。
+// round = { verdict, remaining_issues:[{id,title,detail,severity}], candidate_dispositions:[{id,disposition}],
+//           adopted:[id|{id,revision_summary,pending}], merges:[{from:[id],into}], annotations:[{id,...metaFields}] }
+export function reduce(prevState, round) {
+  const m = cloneMap(prevState);
+  const r = round || {};
+  applyDispositions(m, r.candidate_dispositions);
+  applyIssues(m, r.remaining_issues);
+  applyAdopted(m, r.adopted);
+  applyMerges(m, r.merges);
+  applyAnnotations(m, r.annotations);
   return { round: (prevState.round || 0) + 1, points: [...m.values()] };
 }
 
-// 纯函数:校验状态机不变量 + 本轮 disposition 协议。返回 {ok, errors:[...]}。
-// ctx = { sentCandidateIds:[id...](本轮增量里 Claude 请 Codex 裁定的 candidate id),
-//         dispositions:[{id,disposition}](本轮 Codex 实际给的) }
-export function validate(state, ctx = {}) {
+// 纯函数:校验本轮事件是否合协议。**按 reduce 的施加顺序在中间态上检查**(修 RS-P2-001)。
+export function validateRound(prevState, round) {
+  const errors = [];
+  const r = round || {};
+  const prev = cloneMap(prevState);
+  const prevCandidates = [...prev.values()].filter((p) => p.state === 'candidate').map((p) => p.id);
+  const disp = r.candidate_dispositions || [];
+  const issueIds = new Set((r.remaining_issues || []).map((it) => it.id));
+
+  // 数组内 id 唯一:Map 入账会把同 id 不同 issue 合并、adopted 静默忽略后续,丢数据(修 RS-P2-008)。
+  const riSeen = new Set();
+  for (const it of r.remaining_issues || []) { if (riSeen.has(it.id)) errors.push(`remaining_issues 含重复 id: ${it.id}`); riSeen.add(it.id); }
+  const adSeen = new Set();
+  for (const a of normAdopted(r.adopted)) { if (adSeen.has(a.id)) errors.push(`adopted 含重复 id: ${a.id}`); adSeen.add(a.id); }
+
+  // (a) disposition 协议:覆盖 prevCandidate、只引用 prevCandidate、无重复、值合法、矛盾。
+  const dispSet = new Set();
+  for (const d of disp) {
+    if (dispSet.has(d.id)) errors.push(`重复 disposition: ${d.id}`);
+    dispSet.add(d.id);
+    const p = prev.get(d.id);
+    if (!p) errors.push(`disposition 引用未知 id: ${d.id}`);
+    else if (p.state !== 'candidate') errors.push(`disposition 引用非 candidate(state=${p.state}) 的 id: ${d.id}`);
+    if (!DISPOSITIONS.includes(d.disposition)) errors.push(`disposition ${d.id}: 非法值 '${d.disposition}'`);
+    if (d.disposition === 'confirmed' && issueIds.has(d.id)) errors.push(`矛盾:${d.id} 被 confirmed 却仍出现在 remaining_issues`);
+    if (d.disposition === 'rejected' && !issueIds.has(d.id)) errors.push(`${d.id} 被 rejected 但未在 remaining_issues 给出仍存在的理由`);
+  }
+  for (const cid of prevCandidates) if (!dispSet.has(cid)) errors.push(`candidate ${cid} 未被裁定(disposition 须覆盖本轮全部 candidate)`);
+
+  // (b) 在 dispositions+issues 之后的中间态上检查 adopted(修 RS-P2-001:允许同轮 rejected→重采纳、采纳本轮新 issue)。
+  const mid = cloneMap(prevState);
+  applyDispositions(mid, disp);
+  applyIssues(mid, r.remaining_issues);
+  for (const a of normAdopted(r.adopted)) {
+    const p = mid.get(a.id);
+    if (!p) errors.push(`adopted 引用未知 id: ${a.id}`);
+    else if (p.state !== 'open') errors.push(`adopted 只能作用于 open,但 ${a.id} 在本轮中间态 state=${p.state}`);
+  }
+
+  // (c) 在 adopted 之后的中间态上**逐个**检查 merges(修 RS-P2-002:同批 A→B+B→C、A→B+A→C 都能被抓)。
+  applyAdopted(mid, r.adopted);
+  for (const mg of r.merges || []) {
+    const into = mid.get(mg.into);
+    if (!into) errors.push(`merge into 未知 id: ${mg.into}`);
+    else if (into.state === 'merged') errors.push(`merge 目标 ${mg.into} 已是 merged(终态/被本批先合并)`);
+    for (const fid of mg.from || []) {
+      const fp = mid.get(fid);
+      if (!fp) errors.push(`merge from 未知 id: ${fid}`);
+      else if (fp.state === 'merged') errors.push(`merge 来源 ${fid} 已是 merged(终态/被本批先合并),不可重复合并`);
+      if (fid === mg.into) errors.push(`merge from 与 into 相同: ${fid}`);
+    }
+    const fromSeen = new Set();
+    for (const fid of mg.from || []) { if (fromSeen.has(fid)) errors.push(`merge from 含重复 id: ${fid}`); fromSeen.add(fid); } // 修 RS-P2-002(minor)
+    applyMerges(mid, [mg]); // 逐个施加,使后续 merge 看到更新后的态
+  }
+
+  // remaining_issues 不得引用已 merged(终态)的点——否则会被静默更新却不渲染,issue 凭空消失(修 RS-P2-006)。
+  for (const it of r.remaining_issues || []) {
+    const p = prev.get(it.id);
+    if (p && p.state === 'merged') errors.push(`remaining_issues 引用了已 merged(终态)点 ${it.id};应引用其活跃目标或换新 id`);
+  }
+
+  // annotations:id 必须存在(于施加完 merges 的中间态)且不重复——typo 会静默丢失 §7 元数据(修 RS-P2-007)。
+  const annSeen = new Set();
+  for (const an of r.annotations || []) {
+    if (annSeen.has(an.id)) errors.push(`重复 annotation: ${an.id}`);
+    annSeen.add(an.id);
+    if (!mid.get(an.id)) errors.push(`annotation 引用未知 id: ${an.id}`);
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
+// 纯函数:state 结构不变量(id 唯一、合法 state、合并图双向 reciprocity 且目标为活跃点、parent 无环)。
+export function validateState(state) {
   const errors = [];
   const points = state.points || [];
-  const ids = points.map((p) => p.id);
+  const ids = new Set();
+  for (const p of points) { if (ids.has(p.id)) errors.push(`duplicate point id: ${p.id}`); ids.add(p.id); }
+  const byId = indexById(points);
 
-  // id 唯一
-  const seen = new Set();
-  for (const id of ids) {
-    if (seen.has(id)) errors.push(`duplicate point id: ${id}`);
-    seen.add(id);
-  }
-  // 合法 state + 合并完整性
   for (const p of points) {
     if (!STATES.includes(p.state)) errors.push(`point ${p.id}: invalid state '${p.state}'`);
     if (p.state === 'merged') {
       if (!p.merged_into) errors.push(`merged point ${p.id} missing merged_into`);
-      else if (!seen.has(p.merged_into)) errors.push(`point ${p.id} merged_into unknown id ${p.merged_into}`);
-      if (p.merged_into === p.id) errors.push(`point ${p.id} merged_into itself`);
+      else if (p.merged_into === p.id) errors.push(`point ${p.id} merged_into itself`);
+      else {
+        const tgt = byId.get(p.merged_into);
+        if (!tgt) errors.push(`point ${p.id} merged_into unknown id ${p.merged_into}`);
+        else if (tgt.state === 'merged') errors.push(`point ${p.id} merged_into ${p.merged_into},但后者也是 merged(目标须为活跃点;杜绝链/环)`);
+        else if (!(tgt.merged_from || []).includes(p.id)) errors.push(`合并 reciprocity 缺失:${p.merged_into}.merged_from 未包含 ${p.id}`);
+      }
     }
-    if (p.parent_id && p.parent_id === p.id) errors.push(`point ${p.id} parent_id is itself`);
-  }
-
-  // disposition 协议:覆盖本轮全部 sentCandidate + 不引用未知/非本轮 id
-  const sent = new Set(ctx.sentCandidateIds || []);
-  const disp = ctx.dispositions || [];
-  const dispIds = new Set(disp.map((d) => d.id));
-  for (const id of sent) {
-    if (!dispIds.has(id)) errors.push(`candidate ${id} 未被 Codex 裁定(disposition 须覆盖本轮全部 candidate)`);
-  }
-  for (const d of disp) {
-    if (!sent.has(d.id)) errors.push(`disposition 引用了非本轮 candidate id: ${d.id}`);
-    if (d.disposition !== 'confirmed' && d.disposition !== 'rejected') {
-      errors.push(`disposition ${d.id}: 非法值 '${d.disposition}'`);
+    // 反向 reciprocity:merged_from 里每个 id 必须确实 merged 到本点(修 RS-P2-002:A→B+A→C 留下 B.merged_from 陈旧)。
+    const mfSeen = new Set();
+    for (const fid of p.merged_from || []) {
+      if (mfSeen.has(fid)) errors.push(`${p.id}.merged_from 含重复 id ${fid}`); // 修 RS-P2-002(minor)
+      mfSeen.add(fid);
+      const fp = byId.get(fid);
+      if (!fp) errors.push(`point ${p.id}.merged_from 含未知 id ${fid}`);
+      else if (fp.state !== 'merged' || fp.merged_into !== p.id) errors.push(`反向 reciprocity 不符:${p.id}.merged_from 含 ${fid},但 ${fid} 并未 merged 到 ${p.id}`);
     }
+  }
+  // parent_id 环检测。
+  for (const p of points) {
+    if (!p.parent_id) continue;
+    if (p.parent_id === p.id) { errors.push(`point ${p.id} parent_id is itself`); continue; }
+    const seen = new Set([p.id]);
+    let cur = byId.get(p.parent_id);
+    while (cur) {
+      if (!byId.has(cur.id)) { errors.push(`point ${p.id} parent_id chain 含未知 id`); break; }
+      if (seen.has(cur.id)) { errors.push(`parent 环:涉及 ${cur.id}`); break; }
+      seen.add(cur.id);
+      if (!cur.parent_id) break;
+      cur = byId.get(cur.parent_id);
+    }
+    if (p.parent_id && !byId.has(p.parent_id)) errors.push(`point ${p.id} parent_id unknown: ${p.parent_id}`);
   }
   return { ok: errors.length === 0, errors };
 }
 
-// 纯函数:能否收敛(双 AGREE 闸门的状态侧)。candidate 非空一律不可收敛。
+export const validate = validateState; // 向后兼容别名(结构校验)
+
 export function canConverge(state, codexVerdict, claudeAgree) {
   const pts = state.points || [];
   const open = pts.filter((p) => p.state === 'open').length;
@@ -142,12 +224,17 @@ export function counts(state) {
   return c;
 }
 
-// 渲染:进度行。
 export function renderProgress(round, codexVerdict, blockers, claudeStance) {
   return `第 ${round} 轮 · Codex=${codexVerdict} · 剩 ${blockers.k} issue(${blockers.b} blocker) · Claude=${claudeStance}`;
 }
 
-// 渲染:四段 UNRESOLVED 块(供 review.md §7)。meta = {reason, reviewed_scope, assumptions, truncated}。
+function defaultRecommendation(open) {
+  if (!open.length) return '无未决分歧;待复核确认项(🔶)需用户/下一轮确认后即可定论。';
+  const ordered = [...open].sort((a, b) => (SEV_RANK[a.severity] ?? 9) - (SEV_RANK[b.severity] ?? 9));
+  return `按影响严重度优先处理:${ordered.map((p) => `[${p.id}](${p.severity})`).join(' → ')}。到顶≠问题已穷尽,可调高 --max-rounds 继续。`;
+}
+
+// 渲染四段 UNRESOLVED 块(供 review.md §7)。meta={reason,reviewed_scope,assumptions,truncated,recommendation}
 export function renderUnresolved(state, meta = {}) {
   const pts = state.points || [];
   const by = (s) => pts.filter((p) => p.state === s);
@@ -161,33 +248,42 @@ export function renderUnresolved(state, meta = {}) {
   L.push(agreed.length ? agreed.map((p) => `- [${p.id}] ${p.title}`).join('\n') : '无——双方自始至终未就任何要点达成一致');
   L.push('');
   L.push('### 🔶 待复核确认(Claude 已让步,Codex 尚未确认 —— 不算定论)');
-  L.push(candidate.length ? candidate.map((p) => `- [${p.id}] ${p.title}(来源严重度:${p.severity})`).join('\n') : '无');
+  L.push(candidate.length
+    ? candidate.map((p) => {
+        const mm = p.meta || {};
+        const rev = mm.revision_summary ? ` · 修订:${mm.revision_summary}` : '';
+        const pend = mm.pending ? ` · 待确认:${mm.pending}` : '';
+        return `- [${p.id}] ${p.title}(来源严重度:${p.severity}${rev}${pend})`;
+      }).join('\n')
+    : '无');
   L.push('');
   L.push('### ❌ 仍未达成一致');
-  L.push(open.length ? open.map((p) => `- [${p.id}] ${p.title}(影响严重度:${p.severity})`).join('\n') : '无');
+  if (open.length) {
+    for (const p of open) {
+      const mm = p.meta || {};
+      L.push(`- 卡点 [${p.id}]:${p.title}${p.detail ? ` —— ${p.detail}` : ''}`);
+      L.push(`  · Claude 立场 / Codex 立场:${mm.claude_stance || '—'} / ${mm.codex_stance || '—'}`);
+      L.push(`  · 状态(解决路径):${mm.status || '—'}  ·  影响严重度:${p.severity || '—'}`);
+      L.push(`  · 影响后果:${mm.consequence || '—'}  ·  解决需要:${mm.resolution_needed || '—'}`);
+    }
+  } else { L.push('无'); }
   L.push('');
   L.push('### 📋 给用户的裁决建议');
-  L.push('<按影响严重度排序;到达 max-rounds 时提示「到顶≠问题已穷尽,可调高 --max-rounds 继续」>');
+  L.push(meta.recommendation || defaultRecommendation(open)); // 无 recommendation 时派生,不再打字面占位(修 RS-P2-003)
   return L.join('\n');
 }
 
-// 薄 CLI:review.md 可经 bash 调用。用法:
-//   echo '{"prevState":{...},"round":{...}}'   | node review-state.mjs reduce
-//   echo '{"state":{...},"ctx":{...}}'          | node review-state.mjs validate
-//   echo '{"state":{...},"meta":{...}}'         | node review-state.mjs render-unresolved
-//   echo '{"state":{...},"codexVerdict":"AGREE","claudeAgree":true}' | node review-state.mjs converge
-function readStdin() {
-  return new Promise((res) => { let d = ''; process.stdin.on('data', (c) => (d += c)).on('end', () => res(d)); });
-}
-
-const isMain = import.meta.url === `file://${process.argv[1]}`;
+// 薄 CLI:reduce / validate-round / validate-state / converge / counts / render-unresolved
+function readStdin() { return new Promise((res) => { let d = ''; process.stdin.on('data', (c) => (d += c)).on('end', () => res(d)); }); }
+const isMain = import.meta.url === pathToFileURL(process.argv[1] || '').href;
 if (isMain) {
   const cmd = process.argv[2];
   const raw = await readStdin();
   const inp = raw.trim() ? JSON.parse(raw) : {};
   let out;
   if (cmd === 'reduce') out = reduce(inp.prevState || emptyState(), inp.round || {});
-  else if (cmd === 'validate') out = validate(inp.state || emptyState(), inp.ctx || {});
+  else if (cmd === 'validate-round') out = validateRound(inp.prevState || emptyState(), inp.round || {});
+  else if (cmd === 'validate-state') out = validateState(inp.state || emptyState());
   else if (cmd === 'converge') out = canConverge(inp.state || emptyState(), inp.codexVerdict, !!inp.claudeAgree);
   else if (cmd === 'counts') out = counts(inp.state || emptyState());
   else if (cmd === 'render-unresolved') out = { text: renderUnresolved(inp.state || emptyState(), inp.meta || {}) };
