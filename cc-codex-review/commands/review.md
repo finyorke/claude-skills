@@ -1,5 +1,5 @@
 ---
-description: Claude 与 Codex 围绕某项工作循环互审,直到双方 AGREE
+description: Claude 与 Codex 围绕某项工作循环互审,收敛于双方 AGREE,否则到顶/停滞产出 UNRESOLVED 裁决
 argument-hint: '[--repo <dir>] [--diff <file|->] [--plan <file>] [--model <m>] [--max-rounds <n>] [--dry-run] <评审指令>'
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
@@ -25,11 +25,16 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 - `--diff <file|->`:一份 diff;`-` 表示从本对话里用户粘贴的 diff 块取。
 - `--plan <file>`:任务目标/规格文件。
 - `--model <m>`:传给 Codex 的模型。
-- `--max-rounds <n>`:硬上限轮数。
+- `--max-rounds <n>`:硬上限轮数;`--max-rounds 0` 显式表示**不设上限**(仅靠停滞检测 + 人工兜底)。
 - `--dry-run`:只组装并打印「评审包」+ 将要执行的命令,**不真正调用 Codex**,然后停止。
 
-硬上限优先级:`--max-rounds` > 评审指令自然语言里出现的轮数("最多 5 轮"等,你来解析) > 默认无硬上限。
-- **门禁 / 签核用途强烈建议显式设 `--max-rounds`**:无硬上限 + 对抗式分歧下可能不收敛;门禁场景宁可到顶产出「UNRESOLVED」也不要无限循环。
+硬上限优先级:`--max-rounds` flag > 评审指令自然语言里出现的轮数("最多 5 轮"等) > **内置默认上限 `5`**。
+- **解析与归一化**:先得出 `max`(按上述优先级)。`max` 必须是**非负整数**;若解析出负数 / 非整数 / 无法识别的值 → **停止并报参数错误**,不要静默回退默认。再归一化出 `effective_max`:**仅当 `max` 来自 `--max-rounds 0`(flag)** → `effective_max=null`(无上限);否则 `effective_max=max`。**§6/§7 的「到顶」判定一律用 `effective_max`**(避免把 0 误当成"0 轮即终止")。
+- **自然语言轮数**:仅当评审指令里出现**明确的"最多/上限 N 轮"(N≥1)**才采纳;模糊措辞("多审几轮")不改默认。**自然语言里的"0 轮"不被接受为"无限"**(反直觉)——"无上限"只能由 flag `--max-rounds 0` 显式表达;自然语言 0 视为非法 → 报参数错误。
+- 设计原则:**有界是默认,放开是显式 opt-in**。对抗式复核里 Codex 常不会自然让步、停滞检测也可能不触发(它每轮挖出*新*问题就不算停滞),故默认必须有上限,否则可能无限循环、空烧 Codex 调用。
+- **默认 `5` 的定位**:它是**调用预算 / 成本天花板,不是"已充分收敛"的阈值**。到顶产出 UNRESOLVED 只代表"用完预算仍未双 AGREE",**不代表问题已穷尽**——下一轮可能仍在有效推进,故 UNRESOLVED 的裁决建议应据此提示"可调高 `--max-rounds` 继续"。
+- 想多谈 → 调高 `--max-rounds`(如 `10`);想彻底放开 → 显式 `--max-rounds 0`(把"无上限"变成主动选择,而非默认)。
+- 门禁 / 签核场景:可按需调整,但**切勿用 `--max-rounds 0`**;宁可到顶产出「UNRESOLVED」也不要无限循环。
 
 ## 2. 收集被审材料
 - 从本对话中收集用户最近粘贴的材料(执行结果、代码片段、计划、提案等),可多段并标注来源。
@@ -70,10 +75,20 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 材料过大时你(Claude)可摘要,但必须在包里**显式标注截断了什么**,并据实让 Codex 在 verdict 里置 `truncated`/`reviewed_scope`。
 
 ## 5. dry-run 短路
-若有 `--dry-run`:打印组装好的 packet.txt 全文 + 下一节将执行的 `codex-round.mjs` 命令行,然后**结束**,不调用 Codex。
+若有 `--dry-run`:依次打印 ① **参数解析回显**;② 组装好的 packet.txt 全文;③ 下一节将执行的 `codex-round.mjs` 命令行,然后**结束**,不调用 Codex。
+- **参数解析回显**(使 §1 的解析对用户可眼检,而非只能信执行者)打印一行:
+  `解析结果:effective_max=<n|null> (来源:flag/自然语言/默认) · max-rounds-raw=<原值> · repo=<…|无> · diff=<…|无> · plan=<…|无> · model=<…|默认>`
+  - `effective_max=null` 表示无上限(仅 `--max-rounds 0` 会得到);来源标明该值取自 `--max-rounds` flag、自然语言「最多 N 轮」还是内置默认 5。
+  - 若参数非法(`--max-rounds` 为负/非整数、自然语言「0 轮」等,见 §1),dry-run 同样要**先打印解析错误并停止**:`解析错误:<原因>`,不组装评审包。
 
 ## 6. 互审循环
-维护 `thread_id`(初始空)、`round=0`、`prev`(上一轮的 issue 摘要,初始空)。
+维护 `thread_id`(初始空)、`round=0`、`prev`(上一轮的 issue 摘要,初始空)、`agreed`(**已达成一致清单**,初始空)、`candidate`(**候选共识清单**,初始空)。
+- **两级晋升,防止把未经双方确认的点当成"已定结论"**:
+  - 当你本轮**采纳并修订**了某条 issue → 该点先进 `candidate`(候选:你已让步,但 Codex 尚未复核你的修订)。每条 candidate 记为结构化条目:`{id(稳定,如 C1/C2…), 来源 issue 严重度(blocker/major/minor), 修订摘要, 待 Codex 确认的点}`——**id 跨轮稳定不变**,便于逐条追踪确认/拒绝/撤销。
+  - **晋升须 Codex 明确确认**:在下一轮增量里**逐条列出未决 candidate(带 id)请 Codex 确认**;仅当 Codex **明确表示该点已解决/不再质疑**才晋升到 `agreed`(已确认)。**「该 issue 这轮没再出现」不算确认**(可能只是被遗漏、改名或关注点转移),不得据此晋升。Codex 明确拒绝 → 退回 `❌ 仍未达成一致`。
+  - **可撤销(方向要对)**:若已晋升的 `agreed` 点在后续轮又被 Codex 重新质疑 → 此时双方已重新对峙,**退回 `❌ 仍未达成一致`**(不是退回 candidate);仅当 Claude 接受该质疑并完成**新修订**后,才再次进入 `candidate`。
+  - **完整状态机**:`❌` ──(Claude 采纳并修订)──▶ `🔶 candidate` ──(Codex 明确确认)──▶ `✅ agreed`;`🔶` ──(Codex 明确拒绝)──▶ `❌`;`✅` ──(Codex 重新质疑)──▶ `❌`。任何"消失/沉默"都不构成状态迁移。
+- 只有 `agreed`(已确认)才计入 §7 的「✅ 已达成一致」;`candidate` 不算"已定结论"。仅记双方实质都接受的点,勿充数。
 
 每轮:
 1. `round++`。
@@ -85,7 +100,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
      [--repo <dir>] [--model <m>] [--resume <thread_id>] \
      < <packet 或增量文件>
    ```
-   - 第 1 轮 stdin 喂完整 packet.txt;第 2 轮起只喂**增量**(你对上轮每条 issue 的逐条回应 + 修订后的「Claude 当前主张」)。
+   - 第 1 轮 stdin 喂完整 packet.txt;第 2 轮起只喂**增量**,增量须含三部分:① 你对上轮每条 issue 的逐条回应;② 修订后的「Claude 当前主张」;③ **所有仍未确认的 `candidate`(带稳定 id)+ 逐条请 Codex 确认/拒绝** —— candidate 持续随每轮增量携带,直到被明确确认、拒绝或撤销。
 3. 解析脚本 stdout 的那行 JSON:
    - `error=codex_unavailable` → 告诉用户运行 `/codex:setup`,**停止**。
    - `error=bad_verdict` → 已重试仍失败;把 `raw_message` + `codex_exit` + `stdout_tail`/`stderr_tail`(含 codex 的 error/turn.failed 事件)给用户帮助排查,**停止**。
@@ -95,9 +110,10 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
    - 若 Codex=CHANGES:对**每条 issue** 要么采纳并修订你的主张,要么带理由反驳(写下你的理由)。更新你的主张。
    - 你给出本轮自己的立场:无任何剩余异议 → Claude=AGREE,否则 Claude=持异议。
 6. **双 AGREE 闸门**:仅当 `Codex.verdict==AGREE` 且你也 Claude=AGREE → 收敛,跳出。
+   - **AGREE 与 candidate 的关系**:Codex 在「本轮增量已逐条列出全部未决 candidate」的前提下返回 `AGREE`,**即视为对这些 candidate 的整体确认** → 把它们全部晋升 `agreed`。因此**收敛(RESOLVED)时 `candidate` 必为空**;若某轮 Codex 给了 AGREE 但你本轮**未**把未决 candidate 列全请其确认,则**不得收敛**,需再补一轮列全 candidate 求确认。这样杜绝"AGREE 收敛却仍隐藏未确认项"的假 RESOLVED。
 7. **终止条件**(任一即停):
    - 双 AGREE → 收敛成功。
-   - 设了硬上限且 `round>=max` → **UNRESOLVED**(未收敛)。
+   - `effective_max != null` 且 `round >= effective_max` → **UNRESOLVED**(到顶未收敛)。
    - **停滞**:本轮 `remaining_issues` 与上一轮实质相同、且你的主张未实质变化 → **UNRESOLVED**。
    - 把本轮 issue 摘要存入 `prev` 供下一轮比较。
 
@@ -109,14 +125,35 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   <后续行动的具体建议>
   ```
   若最后一轮 `truncated=true`,**必须**在结论顶部加一行 `⚠️ 基于截断材料(reviewed_scope: ...),非完整签核`,避免被误读为全量通过。
-- 未收敛(硬上限 / 停滞 / 用户打断):打印**结构化 UNRESOLVED 块**,供用户裁决:
+- 未收敛(硬上限 / 停滞 / 用户打断):打印**结构化 UNRESOLVED 块**,供用户裁决。**必须既展示已达成的共识、也逐条标注未决分歧的类型与影响**,让用户能区分"地基已牢、只差几处"还是"全程在吵",并判断每条卡点要不要现在管:
   ```
   ⚠️ 未收敛(状态:UNRESOLVED · 原因:<到达 max-rounds / 停滞 / 用户打断>)
-  · Claude 最后立场:<...>
-  · Codex 最后立场:<verdict + 关键 remaining_issues>
-  · 卡点(双方分歧):<逐条>
-  · 建议:<用户需决策什么 / 或建议设/调 --max-rounds>
+  评审范围:<最后一轮 reviewed_scope>  ·  关键假设:<assumptions 摘要>
+  <若最后一轮 truncated=true,加一行:⚠️ 基于截断材料,下列「已达成一致」均为非完整签核,人工裁决时须复核范围>
+
+  ### ✅ 已达成一致(双方已确认,可视为已定结论)
+  <逐条列出 `agreed`(已确认级)清单;Codex 已明确确认的点。若确实一条都没有,写"无——双方自始至终未就任何要点达成一致">
+
+  ### 🔶 待复核确认(Claude 已让步,Codex 尚未确认 —— 不算定论)
+  <逐条列出 `candidate`,每条带:id · 来源严重度[blocker/major/minor] · 修订摘要 · 待确认的点。
+   这些既非已确认共识、也非仍在对峙的分歧,需用户/下一轮复核确认。
+   保留「来源严重度」是为了让用户知道——一条由 blocker 修订而来、却仍待确认的 candidate,其风险不应因转入此段而被埋没。若为空写"无">
+
+  ### ❌ 仍未达成一致
+  <对每条未决卡点(两个维度独立标注,勿混);不要把 `candidate` 项重复列进这里:
+   · 卡点:<分歧内容>
+   · Claude 立场 / Codex 立场:<各自主张,一句话>
+   · 状态(解决路径):[固有局限 | 待补工作 | 待裁决分歧]
+   · 影响严重度:[blocker | major | minor]  ← 复用 Codex verdict 的严重度口径
+   · 影响后果(若不解决):<具体会发生什么>
+   · 解决需要:<谁做什么 / 或需用户决策什么>>
+
+  ### 📋 给用户的裁决建议
+  <按 影响严重度 排序的下一步;到达 max-rounds 时提示"可调高 `--max-rounds` 继续"(因到顶≠问题已穷尽)>
   ```
+  - **状态(解决路径)判定**:`固有局限`=任何方案都绕不开的理论/能力边界;`待补工作`=方向双方都认可、只是本次未纳入并复核的具体工作;`待裁决分歧`=双方仍各持立场的实质争议(方案取舍、事实判断、证据是否充分等),需用户拍板。注意:`固有局限` **不等于可无条件放行**——严重的仍须用户知情决策;放不放行由「影响严重度」决定,不由状态决定。
+  - **影响严重度**:统一用 `blocker/major/minor`(与 schema、Codex verdict 同口径),不另立高/中/低。
+  - **诚实约束**:`已达成一致` 只写已晋升到 `agreed`(Codex 已确认)的点;Claude 单方让步但未经 Codex 确认的一律进 `🔶 待复核确认`,不得混入 `✅`。
 
 ## 注意
 - 只有真的无异议才输出 AGREE;不认同 Codex 就带理由反驳,而非投降。顺从式同意视为失败。

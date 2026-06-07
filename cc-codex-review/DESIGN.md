@@ -6,11 +6,11 @@
 
 ## 1. 目标
 
-提供一个通用能力:**Claude 与 Codex 围绕某项工作循环互审,直到双方达成一致(AGREE)。**
+提供一个通用能力:**Claude 与 Codex 围绕某项工作循环互审,收敛于双方达成一致(AGREE);未收敛(到顶/停滞)则产出结构化 UNRESOLVED 交人工裁决。**
 
 ### 核心抽象
 
-> Claude(当前会话)对某项工作形成主张;Codex 对抗式复核该主张;两方迭代修订,直到都 AGREE;输出收敛后的结论。
+> Claude(当前会话)对某项工作形成主张;Codex 对抗式复核该主张;两方迭代修订,收敛于都 AGREE 则输出结论,未收敛则到顶/停滞产出 UNRESOLVED。
 
 这是一个**通用的「Claude × Codex 收敛互审」协议**,不关心被审材料从哪来——它可以是一份计划、一段代码 diff、某个执行结果、一份草案或提案。
 
@@ -68,11 +68,15 @@
 - `--diff <file|->`:把一份 diff 作为文本放进评审包(「不接仓库、只看 diff」场景);`-` 表示读用户粘贴的 diff 块。
 - `--plan <file>`:任务目标 / 规格文件路径;不给则用对话里的目标,或 Claude 问用户一次。
 - `--model <m>`:传给 `codex -m`;不给用 codex 默认。
-- `--max-rounds <n>`:硬上限轮数(精确控制)。
+- `--max-rounds <n>`:硬上限轮数(精确控制);`--max-rounds 0` 显式表示不设上限。
 
 ### 硬上限优先级
 
-`--max-rounds` flag > 指令自然语言("最多 5 轮"由 Claude 解析) > 默认无硬上限。
+`--max-rounds` flag > 指令自然语言("最多 5 轮"由 Claude 解析) > **内置默认上限 `5`**。
+
+**为何要内置默认(而非默认无上限)**:对抗式复核中 Codex 常不会自然让步,而停滞检测靠模型判断、未必可靠——它每轮挖出*新*问题就不算停滞。dogfood 实测见过 4 轮每轮都提出真·新 issue、停滞检测从不触发的情形;若无默认上限,这类深度分歧会无限循环、空烧 Codex 调用。原则:**有界是默认,放开(`--max-rounds 0`)是显式 opt-in**。门禁场景切勿用 `0`。
+
+**默认 `5` 的定位与归一化**:`5` 是**调用预算 / 成本天花板,不是"收敛充分"阈值**——到顶 UNRESOLVED 只表示"用完预算仍未双 AGREE",不代表问题已穷尽(故裁决建议提示可调高继续)。归一化:`max` 须非负整数,否则报参数错误;**仅 flag `--max-rounds 0`** → `effective_max=null`(无限),自然语言"0 轮"视为非法;到顶判定统一用 `effective_max`。详见 `commands/review.md` §1。
 
 ## 4. 互审循环协议 (Claude 遵循)
 
@@ -83,13 +87,20 @@
    - 若 `CHANGES`:Claude 对**每条 issue** 要么**采纳并修订主张**,要么**带理由反驳**;更新主张;给出本轮自己的 verdict。
    - 若 `AGREE`:Claude 检查自己是否也已无异议。
    - **每轮打印一行进度**:`第 N 轮 · Codex=CHANGES · 剩 3 issue(1 blocker) · Claude=持异议`,让用户能看着进度决定是否打断(无硬上限时这是人工兜底的前提)。
-5. **双 AGREE 闸门**:**仅当 `Codex.verdict == AGREE` 且 Claude 主动确认无异议**才结束循环。
+5. **双 AGREE 闸门**:**仅当 `Codex.verdict == AGREE` 且 Claude 主动确认无异议**才结束循环。Codex 在「本轮已列全未决 candidate」前提下给 AGREE = 对这些 candidate 的整体确认(全部晋升 agreed);**收敛时 candidate 必为空**,否则需补一轮列全 candidate 求确认,杜绝"AGREE 却隐藏未确认项"的假收敛。
 6. **终止条件**(任一):
    - 双 AGREE → 收敛成功。
-   - 达到硬上限(若设)→ 未收敛,交人工裁决。
+   - 达到硬上限(默认 5,可由 `--max-rounds` 调整;`0`=不设)→ 未收敛,交人工裁决。
    - **停滞检测**:某轮 Claude 主张 + Codex 的 issue 与上一轮**实质无变化**(同样未决分歧原地重复)→ 暂停,交人工裁决。
    - 用户手动打断(当前会话是交互式,人即兜底)。
-7. **输出**:收敛后 Claude 打印 `✅ 收敛结论` 块:商定的结论 + 后续行动的具体建议。未收敛时打印双方最后立场 + 卡点列表。
+   - 循环中 Claude 维护两级共识与状态机:`❌`──(Claude 采纳修订)──▶`🔶 candidate`──(Codex 明确确认)──▶`✅ agreed`;`🔶`──(Codex 拒绝)──▶`❌`;`✅`──(Codex 重新质疑)──▶`❌`(对峙,**非**退回 candidate)。"消失/沉默"不构成迁移。供未收敛时如实展示收敛成果,且不把未确认的当定论。
+7. **输出**:收敛后 Claude 打印 `✅ 收敛结论` 块:商定的结论 + 后续行动的具体建议。
+   未收敛时打印**结构化 UNRESOLVED 块**,顶部标注「评审范围(reviewed_scope)+ 关键假设(assumptions)」,最后一轮 `truncated=true` 时加非完整签核警告;主体含四段:
+   - `✅ 已达成一致`:`agreed`(Codex 已确认)清单。
+   - `🔶 待复核确认`:`candidate`(Claude 已让步、Codex 未确认)清单 —— 既非定论也非对峙分歧。
+   - `❌ 仍未达成一致`:每条卡点用**两个正交维度**标注 —— `状态`[固有局限 | 待补工作 | 待裁决分歧] + `影响严重度`[blocker | major | minor,复用 verdict 口径],外加影响后果 + 解决需要。
+   - `📋 裁决建议`:按影响严重度排序;到顶时提示「到顶 ≠ 问题已穷尽,可调高 `--max-rounds` 继续」。
+   目的:让用户区分"地基已牢只差几处"与"全程在吵",并判断每条卡点的轻重缓急。诚实约束:`✅` 只列 Codex 已确认的点,Claude 单方让步进 `🔶`。
 
 ## 5. 评审包结构
 
@@ -116,7 +127,7 @@ Claude 组装如下文本,经 stdin 喂给 `codex exec`:
 
 过大时 Claude 摘要材料,并**显式说明截断了什么**(不静默截断)。
 
-仅**第 1 轮**发送上述完整评审包;第 2 轮起借助 `resume`(§6)只发增量(对上轮各 issue 的逐条回应 + 修订后的「Claude 当前主张」)。
+仅**第 1 轮**发送上述完整评审包;第 2 轮起借助 `resume`(§6)只发增量。增量含三部分:① 对上轮各 issue 的逐条回应;② 修订后的「Claude 当前主张」;③ **所有仍未确认的 `candidate`(带稳定 id)+ 逐条请 Codex 确认/拒绝**(candidate 随每轮增量持续携带,直到被明确确认、拒绝或撤销,确保「晋升须明确确认」可落地)。
 
 ## 6. Codex 调用细节
 
@@ -140,10 +151,10 @@ codex exec \
 
 ### 跨轮记忆:resume by id(防不收敛 + 防串会话)
 
-Codex 是对抗式的、又默认无硬上限,若每轮失忆重读,可能反复重提已被说服的点而**永不收敛**。故循环内让 Codex 保持立场记忆:
+Codex 是对抗式的,若每轮失忆重读,可能反复重提已被说服的点而**永不收敛**(尤其 `--max-rounds 0` 放开上限时)。故循环内让 Codex 保持立场记忆:
 
 - **第 1 轮**:fresh `codex exec --json ...`,发送完整评审包。从 stdout **第一行** `{"type":"thread.started","thread_id":"<UUID>"}` 解析并保存 `thread_id`(不可用 `--ephemeral`,否则无法 resume)。
-- **第 2 轮起**:`codex exec resume <thread_id> ...` 按 **id** 续接,只发**增量**(Claude 对上轮 issue 的逐条回应 + 修订后的主张),不必重发整包,省 token。⚠️ **resume 的 flag 集与 fresh 不同**:`exec resume` 接受 `--json`/`--output-schema`/`-o`/`-m`/`--skip-git-repo-check`,但**不接受 `-s`/`--cd`**(实测 0.135.0:传了报 `unexpected argument` 退出 2)。故 resume 轮必须省去 `-s`/`--cd`(沙箱与 cwd 从原 session 继承)。`buildCodexArgs` 已据此分支,`tests/codex-round.test.mjs` 有回归守护(mock 在 resume 下拒绝 `-s`/`--cd`)。
+- **第 2 轮起**:`codex exec resume <thread_id> ...` 按 **id** 续接,只发**增量**(逐条回应 + 修订后主张 + 携带未确认 candidate,见 §5),不必重发整包,省 token。⚠️ **resume 的 flag 集与 fresh 不同**:`exec resume` 接受 `--json`/`--output-schema`/`-o`/`-m`/`--skip-git-repo-check`,但**不接受 `-s`/`--cd`**(实测 0.135.0:传了报 `unexpected argument` 退出 2)。故 resume 轮必须省去 `-s`/`--cd`(沙箱与 cwd 从原 session 继承)。`buildCodexArgs` 已据此分支,`tests/codex-round.test.mjs` 有回归守护(mock 在 resume 下拒绝 `-s`/`--cd`)。
 - **必须按 id,不能用 `--last`**(已实证,codex-cli 0.135.0):`resume --last` = 取**当前 cwd 下最近一条记录的 session**,它**只按 cwd 过滤、不区分 exec 与交互(`codex-tui`)会话**。我们的循环 `--cd <repo>` 跑在项目目录,用户若同时在同一目录手动开了 `codex`,`--last` 会**串到用户的交互会话**;本机还有 `codex-image-gen` 等也在调 codex。故只用捕获到的 `thread_id`。
 - **id 捕获用 stdout in-band 解析**,不靠"找 `~/.codex/sessions` 下最新文件"——后者有并发写竞态,等于另一种 `--last` 陷阱。
 
@@ -211,14 +222,14 @@ cc-codex-review/
   scripts/codex-round.mjs           # 单轮 Codex 调用原语(确定性,可单测)
   schemas/verdict.schema.json        # verdict 结构化输出 schema(strict 模式)
   tests/                            # codex-round 单测 + 假 codex + schema strict 守护
-  README.md / DESIGN.md / PLAN.md   # 文档
+  README.md / DESIGN.md             # 文档(PLAN.md 已于 v0.3.0 移除,历史见 git log)
 ```
 
 根 `marketplace.json` 的 `plugins` 数组追加:
 
 ```json
 { "name": "cc-codex-review", "source": "./cc-codex-review",
-  "description": "Claude × Codex 收敛互审 — 两方迭代复核直到双方 AGREE" }
+  "description": "Claude × Codex 收敛互审 — 两方迭代复核,收敛于双方 AGREE,否则到顶/停滞产出 UNRESOLVED" }
 ```
 
 - 调用名:插件命令为 `/<插件名>:<命令名>`,即 `/cc-codex-review:review`(实现时验证能否省略命名空间)。
@@ -233,9 +244,17 @@ LLM 循环难做单元测试,采用:
 - **冒烟测试**:对一个 trivial 仓库跑一轮,验证 verdict JSON 解析、AGREE/CHANGES 分支、停滞检测触发。
 - 测试深度按用户需求伸缩。
 
+### prompt 级行为手动验收清单
+
+循环是 prompt 驱动,无自动化测试位;以下场景**人工**验收(改动 `commands/review.md` 后过一遍):
+
+- **max-rounds 解析**(均可用 `--dry-run` 眼检:它会回显 `effective_max` 及其来源,见 `commands/review.md` §5):① 不带 flag/不提轮数 → 默认 `effective_max=5`;② `--max-rounds 3` → 3;③ 指令含"最多 6 轮"无 flag → 6;④ flag 与自然语言并存 → flag 优先;⑤ `--max-rounds 0` → 无上限(仅靠停滞 + 人工);⑥ 非法值(负数 / 非整数 / 自然语言"0 轮")→ 报参数错误并停,**不**静默回退默认。
+- **candidate 生命周期**:⑦ Claude 采纳修订 → 进 `candidate`,**不**进 `agreed`;⑧ 下一轮 Codex 明确确认 → 晋升 `agreed`;⑨ issue 仅"这轮没出现"而无确认 → **不**晋升;⑩ 已晋升 `agreed` 点被重新质疑 → 退回 `❌`(非退回 candidate);⑩b Codex 在已列全 candidate 时给 AGREE → candidate 全部晋升、收敛时 candidate 为空。
+- **UNRESOLVED 输出**:⑪ 四段齐全(✅/🔶/❌/📋),`candidate` 落在 🔶 而非 ✅;⑫ 顶部含 reviewed_scope + assumptions;⑬ 最后一轮 truncated → 加非完整签核警告;⑭ 每条卡点同时有「状态」与「影响严重度」两维;⑮ 最后一轮刚采纳的修订 → 落 🔶「待复核确认」,不混入 ✅,也不重复进 ❌。
+
 ## 11. 开放点与实测结论(codex-cli 0.135.0)
 
-已实测确认(冒烟见 README / Task 7):
+已实测确认(冒烟见 README):
 - ✅ **`thread_id` 捕获**:`codex exec --json` stdout 首行 `thread.started.thread_id` 为非空 UUID,in-band 拿到,可用于 resume。
 - ✅ **`--json` + `--output-schema` + `-o` 共存**:三者并列可正常工作,verdict 通过 `-o` 落盘;前提是 schema 满足 strict 模式(见 §6 ⚠️)。最初的非 strict schema 会让 codex 报 `invalid_json_schema` 并退出 1、不写文件——已修复并加 `verdict-schema.test.mjs` 守护。
 - ⚠️ codex 把 API 级错误写进 **stdout 的 `{"type":"error"}` / `turn.failed` 事件**(不是 stderr),且进程退出码为 1。脚本将这类「跑了但没产出合法 verdict」归为 `bad_verdict` 并带 `codex_exit`。
@@ -247,3 +266,16 @@ LLM 循环难做单元测试,采用:
 仍待实测:
 - 插件 command 的实际调用名(`/cc-codex-review:review` 能否省略命名空间)—— 需安装后在 Claude Code 里确认。
 - 大材料的分块评审策略尚为「摘要 + truncated 标注」,未实现自动分块。
+
+## 12. 效果提升路线图(经 Claude×Codex 互审收敛,6 轮双 AGREE — 待实现)
+
+> 以下为**设计层面已收敛**的改进方向,尚未实现。优先级与语义经对抗式互审锁定。
+
+- **P0 结构化协议(P2 的前置)**:扩展 `verdict.schema.json`——每个要点用统一 `point_id`(贯穿全生命周期),`state ∈ {open, candidate, agreed, merged}`(持久),`candidate_dispositions[] = {id, disposition: confirmed|rejected}`(**事件**,非状态),血缘 `parent_id / merged_from / merged_into`;`rejected` 必有同 `point_id` 的 remaining_issue 承载理由。覆盖/未知ID/跨轮稳定/状态机不变量由 **review-state validator** 校验(非靠 JSON Schema)。strict 模式下关系字段用 null/[] 表达不存在。
+  - 状态迁移:`open`─(Claude 采纳修订)→`candidate`─(Codex confirmed)→`agreed`;`candidate`─(Codex rejected)→`open`;`agreed`─(Codex 重新质疑)→`open`;point─(合并)→`merged`(终态,记 `merged_into`,不再独立流转)。
+- **P1 dogfood 度量(数据驱动后续优先级)**:每轮 Claude 标注**互斥主类** `new|repeat` + **正交标签** `revision-induced`(贴 new)/`stuck`(贴 repeat);`confirmed/rejected` 单独计数;包装器记每轮 wall-clock(token 据实可选)。≥3 个真实任务取样。
+- **P2 `review-state.mjs`(无状态纯函数,守 §1/§2)**:只做 `reduce`(状态+command 传入的语义决策→新状态)/`validate`(状态机不变量)/`render`(进度行、四段输出);**接收 `codex-round.mjs` 的结构化结果,不重复解析 stdout、不持久化、不驱动循环**。命名不暗示 driver。
+- **P3 首轮遗漏检查实验**:第 1 轮追加**一次**"针对当前证据与目标的遗漏检查"(**不**预判投机二阶问题、**不**输出 completeness 自评分)。A/B:同任务等额轮数预算配对运行、**纳入 UNRESOLVED 样本**、未收敛率作门禁指标、相同预算快照统一比较(converged/有效issue/噪音/Σwall-clock);"有效 issue" 须经**盲评或固定 rubric 终局复核**(仅"被采纳"不算),并记反向指标"不必要修订"。质量优先决策规则。
+- **P4 多视角复核**:**暂缓**——聚合/去重/冲突裁决/每镜头 candidate 状态/成本上限/收敛语义未定义,且与 §1 YAGNI 有张力。
+
+依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。

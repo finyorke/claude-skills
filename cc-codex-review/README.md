@@ -1,6 +1,6 @@
 # cc-codex-review
 
-Claude × Codex 收敛互审插件:Claude 对某项工作形成主张,Codex 对抗式复核,两方迭代到都 AGREE。
+Claude × Codex 收敛互审插件:Claude 对某项工作形成主张,Codex 对抗式复核,两方迭代收敛于都 AGREE;未收敛(默认满 5 轮或停滞)则产出结构化 UNRESOLVED 交人工裁决。`--max-rounds <n>` 可调上限(`0`=不设)。
 
 ## 安装
 ```

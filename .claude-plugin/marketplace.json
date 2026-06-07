@@ -12,7 +12,7 @@
     {
       "name": "cc-codex-review",
       "source": "./cc-codex-review",
-      "description": "Claude × Codex 收敛互审 — 两方迭代复核直到双方 AGREE"
+      "description": "Claude × Codex 收敛互审 — 两方迭代复核,收敛于双方 AGREE,否则到顶/停滞产出 UNRESOLVED"
     }
   ]
 }
