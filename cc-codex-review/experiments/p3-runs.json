@@ -1,0 +1,34 @@
+{
+  "_doc": "P3 首轮遗漏检查 A/B 实验数据。每条 run 见 scripts/experiment.mjs 数据模型。effective 由固定 rubric 终局复核给出,非'被采纳即有效';借核实 review-state.mjs 源码逐条判定(如 T3-B 的 RS-P2-017 经核实 claim1 误读、claim2 真实,收窄后判 effective)。",
+  "_rubric_effective": "issue 为 effective 当且仅当:问题在当前证据下真实存在且值得行动(修码/改设计/补证据),而非风格偏好、重复、基于错误前提、或纯投机的未来假设。",
+  "_rubric_unnecessary_revision": "一次修订为 unnecessary 当且仅当:Claude 据某 issue 改了主张/代码,但终局 rubric 认为该 issue 非 effective(即本不该改)。",
+  "_caveat": "单 Claude 同时驱动+裁判,非真盲评;两臂各用全新 Codex thread(无跨臂 resume),issue 由 Codex 独立产出;effective 标注与驱动是被污染部分,结论须打折。两臂噪音均为 0(Codex 是强评审,且 B 的遗漏检查带硬约束防投机)——故差异主要在'真实 issue 的数量/深度',不在噪音。",
+  "_notes": {
+    "T1-codex-round": "审 scripts/codex-round.mjs。A 2 条;B 5 条(含 A 两条对应项 + 新增 --out 异常/ENOBUFS 诊断/非单调时钟)。两臂 2 轮收敛,噪音 0。B 严格多挖 3 条。",
+    "T2-metrics": "审 scripts/metrics.mjs。A 3 条 / B 3 条,2 条重叠(NUM 无效数值、EMPTY 空任务均值),各 1 条独有(A:失败轮次完整性 MET-ERR-001;B:id 校验 MTR-ID-001)。两臂 2 轮收敛,噪音 0。遗漏检查此任务无增量。",
+    "T3-review-state": "审 scripts/review-state.mjs(成熟代码)。A 3 条(空串/别名/malformed,2 轮);B 8 条含 1 blocker(merge 绕过未决确认→假收敛)+ CLI 宽松假收敛/validateState 不变量等,3 轮(其中 RS-P2-017 走了反驳→Codex 收窄→采纳路径)。A/B 的 RS-P2-010/011/012 编号撞号但内容不同(独立 thread),按 run 内唯一即可。B 大幅多挖,含 A 完全没发现的 blocker。",
+    "_id_collision": "T3-A 与 T3-B 都从 RS-P2-010 起编号但语义不同(各自 thread 独立续编);experiment.mjs 仅校验单 run 内 issue id 唯一,跨 run 撞号无碍。"
+  },
+  "A": [
+    { "task": "T1-codex-round", "arm": "A", "budget": 6, "converged": true, "rounds": 2, "wall_clock_ms": 248319,
+      "issues": [ { "id": "CR-UNAUTH-STDOUT", "effective": true }, { "id": "CR-RETRY-METADATA", "effective": true } ],
+      "effective_basis": "rubric", "unnecessary_revisions": 0 },
+    { "task": "T2-metrics", "arm": "A", "budget": 6, "converged": true, "rounds": 2, "wall_clock_ms": 241646,
+      "issues": [ { "id": "MET-ERR-001", "effective": true }, { "id": "MET-NUM-001", "effective": true }, { "id": "MET-TASK-001", "effective": true } ],
+      "effective_basis": "rubric", "unnecessary_revisions": 0 },
+    { "task": "T3-review-state", "arm": "A", "budget": 6, "converged": true, "rounds": 2, "wall_clock_ms": 257817,
+      "issues": [ { "id": "RS-P2-010", "effective": true }, { "id": "RS-P2-011", "effective": true }, { "id": "RS-P2-012", "effective": true } ],
+      "effective_basis": "rubric", "unnecessary_revisions": 0 }
+  ],
+  "B": [
+    { "task": "T1-codex-round", "arm": "B", "budget": 6, "converged": true, "rounds": 2, "wall_clock_ms": 408824,
+      "issues": [ { "id": "CR-THREAD-ATTEMPT", "effective": true }, { "id": "CR-UNAVAILABLE-CHANNEL", "effective": true }, { "id": "CR-OUT-OWNERSHIP", "effective": true }, { "id": "CR-RETRY-DIAG", "effective": true }, { "id": "CR-CLOCK-MONOTONIC", "effective": true } ],
+      "effective_basis": "rubric", "unnecessary_revisions": 0 },
+    { "task": "T2-metrics", "arm": "B", "budget": 6, "converged": true, "rounds": 2, "wall_clock_ms": 312593,
+      "issues": [ { "id": "MTR-ID-001", "effective": true }, { "id": "MTR-NUM-001", "effective": true }, { "id": "MTR-EMPTY-001", "effective": true } ],
+      "effective_basis": "rubric", "unnecessary_revisions": 0 },
+    { "task": "T3-review-state", "arm": "B", "budget": 6, "converged": true, "rounds": 3, "wall_clock_ms": 412775,
+      "issues": [ { "id": "RS-P2-010", "effective": true }, { "id": "RS-P2-011", "effective": true }, { "id": "RS-P2-012", "effective": true }, { "id": "RS-P2-013", "effective": true }, { "id": "RS-P2-014", "effective": true }, { "id": "RS-P2-015", "effective": true }, { "id": "RS-P2-016", "effective": true }, { "id": "RS-P2-017", "effective": true } ],
+      "effective_basis": "rubric", "unnecessary_revisions": 0 }
+  ]
+}
