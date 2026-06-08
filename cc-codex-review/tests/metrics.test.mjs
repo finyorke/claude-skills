@@ -91,3 +91,24 @@ test('aggregateTasks: 跨任务聚合 + 平均轮数', () => {
   assert.equal(a.total_wall_clock_ms, 2500);
   assert.equal(a.avg_rounds_per_task, 1.5);
 });
+
+// ---- v0.8.3 metrics 加固 ----
+test('MTR-NUM-001: NaN/负 wall、attempts=0 → null;aggregate 不产假 total', () => {
+  assert.equal(roundMetrics({ round: 0, points: [] }, { remaining_issues: [], candidate_dispositions: [] }, { wall_clock_ms: NaN }).wall_clock_ms, null);
+  assert.equal(roundMetrics({ round: 0, points: [] }, { remaining_issues: [], candidate_dispositions: [] }, { wall_clock_ms: -5 }).wall_clock_ms, null);
+  assert.equal(roundMetrics({ round: 0, points: [] }, { remaining_issues: [], candidate_dispositions: [] }, { attempts: 0 }).attempts, null);
+  const a = aggregate([{ round: 1, wall_clock_ms: NaN }, { round: 2, wall_clock_ms: 100 }]);
+  assert.equal(a.total_wall_clock_ms, null, 'NaN 不得被当已计时而产假 total');
+});
+
+test('MTR-ID-001: remaining_issues 重复/空 id 不双计', () => {
+  const m = roundMetrics({ round: 1, points: [] }, {
+    remaining_issues: [{ id: 'I1', title: 't', detail: 'd', severity: 'major' }, { id: 'I1', title: 't', detail: 'd', severity: 'major' }, { id: '', title: 'x', detail: 'y', severity: 'minor' }],
+    candidate_dispositions: [],
+  });
+  assert.equal(m.new, 1, '重复 id 去重、空 id 丢弃 → 只 1 个 new');
+});
+
+test('MET-TASK-001: aggregateTasks([]) avg_rounds_per_task=null(0 任务无均值)', () => {
+  assert.equal(aggregateTasks([]).avg_rounds_per_task, null);
+});

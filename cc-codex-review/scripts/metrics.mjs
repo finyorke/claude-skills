@@ -19,13 +19,18 @@ import { pathToFileURL } from 'node:url';
 export function roundMetrics(prevState, round, opts = {}) {
   const prevIds = new Set((prevState.points || []).map((p) => p.id));
   const issues = round.remaining_issues || [];
-  const newIds = issues.map((it) => it.id).filter((id) => !prevIds.has(id));
-  const repeatIds = issues.map((it) => it.id).filter((id) => prevIds.has(id));
+  // 按 id 去重 + 丢弃缺/空 id —— new/repeat 用 id **集合**语义,重复 id 不得双计(修 MTR-ID-001)。
+  const issueIds = [...new Set(issues.map((it) => it && it.id).filter((id) => typeof id === 'string' && id))];
+  const newIds = issueIds.filter((id) => !prevIds.has(id));
+  const repeatIds = issueIds.filter((id) => prevIds.has(id));
   const ri = new Set(round.revision_induced || []);
   const st = new Set(round.stuck || []);
   const disp = round.candidate_dispositions || [];
-  const wall = opts.wall_clock_ms ?? round.wall_clock_ms ?? null;
-  const attempts = opts.attempts ?? round.attempts ?? null;
+  // 数值域约束(修 MTR-NUM-001):wall 须有限非负、attempts 须整数≥1,否则归 null,杜绝 NaN/负/Inf 被当"已采集"而产假 total。
+  const finiteNonNeg = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+  const posInt = (v) => (typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : null);
+  const wall = finiteNonNeg(opts.wall_clock_ms ?? round.wall_clock_ms);
+  const attempts = posInt(opts.attempts ?? round.attempts);
   return {
     round: (prevState.round || 0) + 1,
     new: newIds.length,
@@ -34,16 +39,17 @@ export function roundMetrics(prevState, round, opts = {}) {
     stuck: repeatIds.filter((id) => st.has(id)).length,          // 只计 repeat∩标签
     confirmed: disp.filter((d) => d.disposition === 'confirmed').length,
     rejected: disp.filter((d) => d.disposition === 'rejected').length,
-    wall_clock_ms: typeof wall === 'number' ? wall : null,
-    attempts: typeof attempts === 'number' ? attempts : null, // 来自 codex-round;>1 即本轮发生过重试
+    wall_clock_ms: wall, // 已约束为有限非负或 null
+    attempts, // 已约束为整数≥1 或 null;来自 codex-round,>1 即本轮发生过重试
   };
 }
 
 // 纯函数:跨轮聚合。total_wall_clock_ms 仅当每轮都有计时才给(否则 null,不假装)。
 export function aggregate(records = []) {
-  const sum = (k) => records.reduce((a, r) => a + (r[k] || 0), 0);
-  const allTimed = records.length > 0 && records.every((r) => typeof r.wall_clock_ms === 'number');
-  const allAttempts = records.length > 0 && records.every((r) => typeof r.attempts === 'number');
+  const sum = (k) => records.reduce((a, r) => a + (Number.isFinite(r[k]) ? r[k] : 0), 0);
+  // 完整性判据收紧:wall 须有限非负、attempts 须整数≥1,否则不汇总(修 MTR-NUM-001:NaN 不得被当已计时而产假 total)。
+  const allTimed = records.length > 0 && records.every((r) => Number.isFinite(r.wall_clock_ms) && r.wall_clock_ms >= 0);
+  const allAttempts = records.length > 0 && records.every((r) => Number.isInteger(r.attempts) && r.attempts >= 1);
   return {
     rounds: records.length,
     new: sum('new'),
@@ -71,7 +77,7 @@ export function aggregateTasks(taskRecordLists = []) {
     confirmed: sum('confirmed'), rejected: sum('rejected'),
     total_wall_clock_ms: allTimed ? sum('total_wall_clock_ms') : null,
     retried_rounds: per.length > 0 && per.every((x) => typeof x.retried_rounds === 'number') ? sum('retried_rounds') : null,
-    avg_rounds_per_task: per.length ? sum('rounds') / per.length : 0,
+    avg_rounds_per_task: per.length ? sum('rounds') / per.length : null, // 0 任务无均值 → null,不伪装成"测得的 0"(修 MET-TASK-001)
   };
 }
 

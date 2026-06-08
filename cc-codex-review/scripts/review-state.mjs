@@ -24,7 +24,8 @@ export function emptyState() { return { round: 0, points: [] }; }
 function indexById(points) { const m = new Map(); for (const p of points) m.set(p.id, p); return m; }
 function normAdopted(adopted) { return (adopted || []).map((a) => (typeof a === 'string' ? { id: a } : a)); }
 function clonePoint(p) {
-  return { ...p, merged_from: p.merged_from ? [...p.merged_from] : undefined, meta: p.meta ? { ...p.meta } : undefined };
+  // meta 深拷贝:避免 nextState 与 prevState/round 共享嵌套引用而反向污染入参(修 RS-P2-014)。
+  return { ...p, merged_from: p.merged_from ? [...p.merged_from] : undefined, meta: p.meta ? structuredClone(p.meta) : undefined };
 }
 function cloneMap(prevState) { return indexById((prevState.points || []).map(clonePoint)); }
 
@@ -41,7 +42,8 @@ function applyIssues(m, issues = []) {
   for (const it of issues) {
     const p = m.get(it.id);
     if (!p) m.set(it.id, { id: it.id, state: 'open', severity: it.severity || 'major', title: it.title || '', detail: it.detail || '' });
-    else { if (it.severity) p.severity = it.severity; if (it.title) p.title = it.title; if (it.detail) p.detail = it.detail; if (p.state === 'agreed') p.state = 'open'; }
+    // 用字段存在性更新(修 RS-P2-016):schema 允许空串,Codex 给 title:""/detail:"" 须能清除旧文案,不能因 falsy 被跳过而残留过期理由。
+    else { if (it.severity) p.severity = it.severity; if ('title' in it) p.title = it.title; if ('detail' in it) p.detail = it.detail; if (p.state === 'agreed') p.state = 'open'; }
   }
 }
 function freshCandidateMeta(p, extra = {}) {
@@ -57,7 +59,7 @@ function applyAdopted(m, adopted = []) {
       const extra = { response_type: 'revision' };
       if (a.revision_summary) extra.revision_summary = a.revision_summary;
       if (a.pending) extra.pending = a.pending;
-      p.meta = freshCandidateMeta(p, extra);
+      p.meta = freshCandidateMeta(p, structuredClone(extra)); // 深拷贝:revision_summary/pending 若为对象不与 round 入参共享别名(修 RS-P2-014-ADOPTED-REBUTTED-ALIAS)
     }
   }
 }
@@ -70,7 +72,7 @@ function applyRebutted(m, rebutted = []) {
       p.state = 'candidate';
       const extra = { response_type: 'rebuttal' };
       if (a.rebuttal) extra.rebuttal = a.rebuttal;
-      p.meta = freshCandidateMeta(p, extra);
+      p.meta = freshCandidateMeta(p, structuredClone(extra)); // 深拷贝:rebuttal 若为对象不与 round 入参共享别名(修 RS-P2-014-ADOPTED-REBUTTED-ALIAS)
     }
   }
 }
@@ -83,7 +85,8 @@ function applyMerges(m, merges = []) {
   }
 }
 function applyAnnotations(m, annotations = []) {
-  for (const an of annotations) { const p = m.get(an.id); if (!p) continue; const { id, ...f } = an; p.meta = { ...(p.meta || {}), ...f }; }
+  // 深拷贝 annotation 字段值,避免对象/数组值在 nextState 与 round 入参间共享别名(修 RS-P2-014)。
+  for (const an of annotations) { const p = m.get(an.id); if (!p) continue; const { id, ...f } = an; p.meta = { ...(p.meta || {}), ...structuredClone(f) }; }
 }
 
 // 纯函数:上一轮 state + 本轮输入 → 新 state(不改入参)。
@@ -105,6 +108,30 @@ export function reduce(prevState, round) {
 export function validateRound(prevState, round) {
   const errors = [];
   const r = round || {};
+
+  // 事件数据契约(修 RS-P2-011):先校验形状,**形状非法即提前返回**,避免下游 .id/.from 迭代抛 TypeError(如 adopted:[null]、merges.from 为字符串被当可迭代)。
+  const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
+  const shape = [];
+  for (const [v, name] of [[r.remaining_issues, 'remaining_issues'], [r.candidate_dispositions, 'candidate_dispositions'], [r.adopted, 'adopted'], [r.rebutted, 'rebutted'], [r.merges, 'merges'], [r.annotations, 'annotations']])
+    if (v != null && !Array.isArray(v)) shape.push(`${name} 须为数组`);
+  for (const [arr, name] of [[r.adopted, 'adopted'], [r.rebutted, 'rebutted']])
+    if (Array.isArray(arr)) for (const a of arr) if (!(typeof a === 'string' ? a : (isObj(a) && typeof a.id === 'string' && a.id))) shape.push(`${name} 元素须为非空 id 字符串或 {id,...}`);
+  if (Array.isArray(r.remaining_issues)) for (const it of r.remaining_issues) {
+    if (!isObj(it) || typeof it.id !== 'string' || !it.id) { shape.push('remaining_issues 元素须为含非空 string id 的对象'); continue; }
+    // 字段类型契约(修 RS-P2-011-PARTIAL-ISSUE-SHAPE):present 即须合法,否则 reduce 会写入非法 point。
+    if ('title' in it && typeof it.title !== 'string') shape.push(`remaining_issues ${it.id}: title 须为 string`);
+    if ('detail' in it && typeof it.detail !== 'string') shape.push(`remaining_issues ${it.id}: detail 须为 string`);
+    if ('severity' in it && (typeof it.severity !== 'string' || !Object.hasOwn(SEV_RANK, it.severity))) shape.push(`remaining_issues ${it.id}: severity 须为 blocker|major|minor`); // 用 hasOwn 防原型属性(toString/__proto__)绕过(修 RS-P2-011-PARTIAL severity)
+  }
+  // adopted/rebutted/annotations 的元数据须为 string(本就是供 §7 渲染的文本):非 string 既无意义,又会让 structuredClone 抛 DataCloneError(修 RS-P2-014-UNCLONEABLE-META)。
+  for (const [arr, name] of [[r.adopted, 'adopted'], [r.rebutted, 'rebutted']])
+    if (Array.isArray(arr)) for (const a of arr) if (isObj(a)) for (const k of ['revision_summary', 'pending', 'rebuttal']) if (k in a && typeof a[k] !== 'string') shape.push(`${name} ${a.id}: ${k} 须为 string`);
+  if (Array.isArray(r.annotations)) for (const an of r.annotations) if (isObj(an)) for (const [k, v] of Object.entries(an)) if (k !== 'id' && typeof v !== 'string') shape.push(`annotation ${an.id}: 字段 ${k} 须为 string`);
+  if (Array.isArray(r.candidate_dispositions)) for (const d of r.candidate_dispositions) if (!isObj(d) || typeof d.id !== 'string' || !d.id) shape.push('candidate_dispositions 元素须为含非空 string id 的对象');
+  if (Array.isArray(r.merges)) for (const mg of r.merges) if (!isObj(mg) || !Array.isArray(mg.from) || typeof mg.into !== 'string' || !mg.into || !mg.from.every((x) => typeof x === 'string' && x)) shape.push('merges 元素须为 {from:[非空id...], into:非空id}');
+  if (Array.isArray(r.annotations)) for (const an of r.annotations) if (!isObj(an) || typeof an.id !== 'string' || !an.id) shape.push('annotations 元素须为含非空 string id 的对象');
+  if (shape.length) return { ok: false, errors: shape };
+
   const prev = cloneMap(prevState);
   const prevCandidates = [...prev.values()].filter((p) => p.state === 'candidate').map((p) => p.id);
   const disp = r.candidate_dispositions || [];
@@ -165,6 +192,8 @@ export function validateRound(prevState, round) {
       const fp = mid.get(fid);
       if (!fp) errors.push(`merge from 未知 id: ${fid}`);
       else if (fp.state === 'merged') errors.push(`merge 来源 ${fid} 已是 merged(终态/被本批先合并),不可重复合并`);
+      // RS-P2-015:来源自身已是合并目标(有 merged_from)→ 再被合并会形成 A→B→C 链;应直接合到最终目标,在 reduce 前拒。
+      else if (fp.merged_from && fp.merged_from.length) errors.push(`merge 来源 ${fid} 自身已吸收了其它点(merged_from 非空),再被合并会形成链;请直接合并到最终目标`);
       // RS-P2-010:不得把未决点(open/candidate)合入已 agreed 的目标——否则该未决分歧随 merged 终态从
       // open/candidate 计数消失,canConverge 据此放行 → 假收敛。要合入 agreed,来源也须已 agreed。
       else if (into && into.state === 'agreed' && fp.state !== 'agreed')
@@ -196,13 +225,21 @@ export function validateRound(prevState, round) {
 // 纯函数:state 结构不变量(id 唯一、合法 state、合并图双向 reciprocity 且目标为活跃点)。
 export function validateState(state) {
   const errors = [];
-  const points = state.points || [];
+  const rawPoints = state.points || [];
+  // 先剔除非对象点元素(null 等),避免下方读 p.id 抛 TypeError(修 RS-P2-012-NONOBJECT-POINT-THROW)。
+  const points = [];
+  for (const p of rawPoints) { if (!p || typeof p !== 'object') errors.push('point 须为对象'); else points.push(p); }
   const ids = new Set();
-  for (const p of points) { if (ids.has(p.id)) errors.push(`duplicate point id: ${p.id}`); ids.add(p.id); }
+  for (const p of points) {
+    if (typeof p.id !== 'string' || !p.id) errors.push('point 缺少非空 string id'); // 修 RS-P2-012
+    if (ids.has(p.id)) errors.push(`duplicate point id: ${p.id}`); ids.add(p.id);
+  }
   const byId = indexById(points);
 
   for (const p of points) {
     if (!STATES.includes(p.state)) errors.push(`point ${p.id}: invalid state '${p.state}'`);
+    // 活跃点(非 merged)不应携带 merged_into——否则是孤儿/陈旧字段,合并图语义被破坏(修 RS-P2-012)。
+    if (p.state !== 'merged' && p.merged_into) errors.push(`活跃点 ${p.id}(state=${p.state})不应带 merged_into(${p.merged_into})`);
     if (p.state === 'merged') {
       if (!p.merged_into) errors.push(`merged point ${p.id} missing merged_into`);
       else if (p.merged_into === p.id) errors.push(`point ${p.id} merged_into itself`);
@@ -275,7 +312,7 @@ export function renderUnresolved(state, meta = {}) {
   if (meta.truncated) L.push('⚠️ 基于截断材料,下列「已达成一致」均为非完整签核,人工裁决时须复核范围');
   L.push('');
   L.push('### ✅ 已达成一致(双方已确认,可视为已定结论)');
-  L.push(agreed.length ? agreed.map((p) => `- [${p.id}] ${p.title}`).join('\n') : '无——双方自始至终未就任何要点达成一致');
+  L.push(agreed.length ? agreed.map((p) => `- [${p.id}] ${p.title}`).join('\n') : '无——当前没有已达成一致(agreed)的要点'); // 只陈述当前快照,不声称"自始至终"(曾 agreed 后被重新质疑会退回 open,修 RS-P2-017)
   L.push('');
   L.push('### 🔶 待复核确认(Claude 已回应:修订或反驳,Codex 尚未确认 —— 不算定论)');
   L.push(candidate.length

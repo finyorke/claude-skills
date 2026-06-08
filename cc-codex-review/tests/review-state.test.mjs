@@ -538,3 +538,87 @@ test('RS-P2-013-R3: canConverge 函数对缺/非数组 points fail-closed(与 CL
   // 正常显式空账本(真无 issue)仍可收敛
   assert.equal(canConverge({ round: 1, points: [] }, 'AGREE', true).converged, true);
 });
+
+// ---- v0.8.3 review-state 余项加固 ----
+test('RS-P2-011: validateRound 对畸形事件结构化失败(不抛 TypeError)', () => {
+  assert.equal(validateRound({ round: 1, points: [] }, { adopted: [null] }).ok, false);
+  assert.match(validateRound({ round: 1, points: [] }, { adopted: [null] }).errors.join('\n'), /adopted 元素须为/);
+  assert.equal(validateRound({ round: 1, points: [] }, { merges: [{ from: 'X', into: 'Y' }] }).ok, false); // from 应是数组,不可当可迭代字符串
+  assert.match(validateRound({ round: 1, points: [] }, { merges: [{ from: 'X', into: 'Y' }] }).errors.join('\n'), /merges 元素须为/);
+  assert.equal(validateRound({ round: 1, points: [] }, { remaining_issues: 'nope' }).ok, false);
+});
+
+test('RS-P2-012: validateState 拒缺 id 点 / 活跃点带 merged_into', () => {
+  assert.match(validateState({ round: 1, points: [{ state: 'open' }] }).errors.join('\n'), /缺少非空 string id/);
+  assert.match(validateState({ round: 1, points: [{ id: 'I1', state: 'open', merged_into: 'X' }] }).errors.join('\n'), /活跃点 I1.*不应带 merged_into/);
+});
+
+test('RS-P2-014: reduce 嵌套 meta 深拷贝,改 nextState 不污染入参', () => {
+  let s = reduce(emptyState(), { remaining_issues: [{ id: 'I1', title: 't', detail: 'd', severity: 'major' }] });
+  s = reduce(s, { annotations: [{ id: 'I1', extra: { nested: [1, 2] } }] });
+  const snap = JSON.stringify(s);
+  const s2 = reduce(s, {}); // 纯克隆一轮
+  s2.points.find((p) => p.id === 'I1').meta.extra.nested.push(99);
+  assert.equal(JSON.stringify(s), snap, '入参 s 不应被 s2 的嵌套修改污染');
+});
+
+test('RS-P2-015: validateRound 前置拒绝会形成链的 merge(来源已有 merged_from)', () => {
+  const prev = { round: 2, points: [
+    { id: 'A', state: 'merged', merged_into: 'B' },
+    { id: 'B', state: 'open', severity: 'major', title: 'b', merged_from: ['A'] },
+    { id: 'C', state: 'open', severity: 'major', title: 'c' },
+  ] };
+  const r = validateRound(prev, { remaining_issues: [], merges: [{ from: ['B'], into: 'C' }] });
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /已吸收了其它点|形成链/);
+});
+
+test('RS-P2-016: 空字符串 title/detail 能覆盖旧文案(不残留过期理由)', () => {
+  let s = reduce(emptyState(), { remaining_issues: [{ id: 'I1', title: 'old', detail: 'oldD', severity: 'major' }] });
+  s = reduce(s, { remaining_issues: [{ id: 'I1', title: '', detail: '', severity: 'major' }] });
+  const p = s.points.find((x) => x.id === 'I1');
+  assert.equal(p.title, '', '空串应覆盖旧标题');
+  assert.equal(p.detail, '');
+});
+
+test('RS-P2-017: renderUnresolved 无 agreed 时只陈述当前快照,不说"自始至终"', () => {
+  const txt = renderUnresolved({ round: 1, points: [{ id: 'I1', state: 'open', severity: 'major', title: 't' }] }, { reason: '测试' });
+  assert.match(txt, /当前没有已达成一致/);
+  assert.doesNotMatch(txt, /自始至终/);
+});
+
+test('RS-P2-011-PARTIAL: validateRound 拒 remaining_issues 非法字段类型(title/detail/severity)', () => {
+  const r = validateRound({ round: 1, points: [] }, { remaining_issues: [{ id: 'I1', title: 123, detail: {}, severity: 'critical' }] });
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /title 须为 string|detail 须为 string|severity 须为/);
+});
+
+test('RS-P2-012-NONOBJECT: validateState 对 null point 元素结构化失败(不抛)', () => {
+  const r = validateState({ round: 1, points: [null, { id: 'I1', state: 'open' }] });
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /point 须为对象/);
+});
+
+test('RS-P2-014-ADOPTED-ALIAS: adopted 的对象型 pending 不与入参共享别名', () => {
+  const round = { adopted: [{ id: 'I1', pending: { items: [1] } }] };
+  let s = reduce(emptyState(), { remaining_issues: [{ id: 'I1', title: 't', detail: 'd', severity: 'major' }] });
+  s = reduce(s, round);
+  s.points.find((p) => p.id === 'I1').meta.pending.items.push(2);
+  assert.deepEqual(round.adopted[0].pending.items, [1], 'round 入参不应被 nextState 修改污染');
+});
+
+test('RS-P2-011-PROTO: severity 原型属性(toString/__proto__)不得绕过枚举校验', () => {
+  for (const bad of ['toString', 'constructor', '__proto__']) {
+    const r = validateRound({ round: 1, points: [] }, { remaining_issues: [{ id: 'I1', title: 't', detail: 'd', severity: bad }] });
+    assert.equal(r.ok, false, `severity='${bad}' 应被拒`);
+  }
+});
+
+test('RS-P2-014-UNCLONEABLE: 含函数的元数据被 shape 守门拒(不抛 DataCloneError)', () => {
+  const r1 = validateRound({ round: 1, points: [] }, { adopted: [{ id: 'I1', pending: () => {} }] });
+  assert.equal(r1.ok, false);
+  assert.match(r1.errors.join('\n'), /pending 须为 string/);
+  const r2 = validateRound({ round: 1, points: [] }, { annotations: [{ id: 'I1', foo: () => {} }] });
+  assert.equal(r2.ok, false);
+  assert.match(r2.errors.join('\n'), /字段 foo 须为 string/);
+});
