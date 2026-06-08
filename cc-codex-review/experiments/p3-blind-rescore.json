@@ -1,0 +1,45 @@
+{
+  "_doc": "P3 实验的【独立盲评复核】——攻掉头号方法学缺陷:原实验由单个 Claude 既驱动又当 effective 裁判(非盲)。此处把 24 条 issue(8 A + 16 B)去标识、打乱后,交给一个独立子 agent(无臂/任务/原标注信息)按固定 rubric 盲评 effective/noise,再映射回去重算 decide。",
+  "_method": "盲评 agent 只收到固定 rubric(effective = 真实存在且值得行动;noise = 风格/重复/错误前提/纯投机/琐碎)+ 24 条去标识技术描述,输出每条 effective|noise。本文件保留 P01..P24 → (arm, 原 issue, 盲评结果, 理由) 的映射。",
+  "_headline": "结论翻转:原非盲标注把两臂所有 issue 都判 effective(noise=0),高估了 B。独立盲评下 decide=keep_A(两种解读一致)。omission-check(B)= 更高召回(发现更多真 bug)但也更高噪音;质量优先规则(不拿噪音换数量)→ 选对照组 A。",
+  "blind_ratings_summary": { "effective": 16, "noise": 8 },
+  "mapping": [
+    { "p": "P01", "arm": "A", "issue": "CR-UNAUTH-STDOUT", "blind": "effective" },
+    { "p": "P02", "arm": "B", "issue": "RS-P2-010 merge 假收敛(blocker)", "blind": "effective" },
+    { "p": "P03", "arm": "A", "issue": "MET-NUM-001", "blind": "effective" },
+    { "p": "P04", "arm": "B", "issue": "CR-CLOCK-MONOTONIC", "blind": "effective" },
+    { "p": "P05", "arm": "A", "issue": "RS-P2-011 alias", "blind": "noise", "reason": "无当前触发(标量路径)" },
+    { "p": "P06", "arm": "B", "issue": "MTR-ID-001", "blind": "effective" },
+    { "p": "P07", "arm": "A", "issue": "CR-RETRY-METADATA", "blind": "effective" },
+    { "p": "P08", "arm": "B", "issue": "RS-P2-013 CLI 宽松", "blind": "effective" },
+    { "p": "P09", "arm": "A", "issue": "MET-ERR-001", "blind": "effective" },
+    { "p": "P10", "arm": "B", "issue": "CR-OUT-OWNERSHIP", "blind": "effective" },
+    { "p": "P11", "arm": "A", "issue": "RS-P2-010 empty-string", "blind": "effective" },
+    { "p": "P12", "arm": "B", "issue": "MTR-NUM-001", "blind": "noise", "reason": "判为 P03 的跨臂重复(池化去重效应)" },
+    { "p": "P13", "arm": "B", "issue": "CR-THREAD-ATTEMPT", "blind": "noise", "reason": "判为 P07 的跨臂重复(池化去重效应)" },
+    { "p": "P14", "arm": "B", "issue": "RS-P2-015 链式 merge 前置拒", "blind": "noise", "reason": "管线最终仍拦,排序 nit(on-merit 真噪音)" },
+    { "p": "P15", "arm": "A", "issue": "MET-TASK-001", "blind": "effective" },
+    { "p": "P16", "arm": "B", "issue": "CR-UNAVAILABLE-CHANNEL", "blind": "effective" },
+    { "p": "P17", "arm": "A", "issue": "RS-P2-012 malformed", "blind": "effective" },
+    { "p": "P18", "arm": "B", "issue": "RS-P2-017 render 措辞", "blind": "effective" },
+    { "p": "P19", "arm": "B", "issue": "CR-RETRY-DIAG", "blind": "noise", "reason": "与 P13 retry 主题 intra-B 重叠,ENOBUFS 增量小" },
+    { "p": "P20", "arm": "B", "issue": "MTR-EMPTY-001", "blind": "noise", "reason": "判为 P15 的跨臂重复(池化去重效应)" },
+    { "p": "P21", "arm": "B", "issue": "RS-P2-011 event contract", "blind": "effective" },
+    { "p": "P22", "arm": "B", "issue": "RS-P2-014 alias", "blind": "noise", "reason": "无当前触发(标量路径),on-merit 真噪音" },
+    { "p": "P23", "arm": "B", "issue": "RS-P2-012 validateState invariants", "blind": "effective" },
+    { "p": "P24", "arm": "B", "issue": "RS-P2-016 empty-string", "blind": "noise", "reason": "判为 P11 的跨臂重复(池化去重效应)" }
+  ],
+  "interpretation_strict_pooled": {
+    "_note": "直接采用盲评原始判定(含池化去重效应:B 与 A 撞车的真 bug 被judge标 duplicate→noise)。",
+    "A": { "effective": 7, "noise": 1, "noise_rate": 0.125 },
+    "B": { "effective": 9, "noise": 7, "noise_rate": 0.4375 },
+    "decide": "keep_A(B 绝对噪音增多 6;噪音率升高 31.3pp)"
+  },
+  "interpretation_fairness_adjusted": {
+    "_note": "校正池化去重效应:跨臂撞车的真 bug(MTR-NUM/CR-THREAD/MTR-EMPTY/RS-B-EMPTY)算 effective,只把 on-merit 真噪音(alias×2 无触发、chain 排序nit、retry-diag intra 重叠)计 noise。",
+    "A": { "effective": 7, "noise": 1, "noise_rate": 0.125 },
+    "B": { "effective": 13, "noise": 3, "noise_rate": 0.1875 },
+    "decide": "keep_A(B 绝对噪音增多 2;噪音率升高 6.3pp)"
+  },
+  "conclusion": "两种解读 decide 均为 keep_A。盲评推翻了非盲实验对 B 的乐观读数:① 非盲单裁判把全部 issue 判 effective,系统性高估 B;② 独立盲评发现真噪音确实存在且更集中在 B(alias 无触发、链式 merge 排序 nit、retry 主题过度细分);③ 即便公平性校正(B 召回更高,13 vs 7 真 bug),B 仍带更多绝对噪音,质量优先规则(不拿噪音换数量)→ 选对照组 A。定性:omission-check 是【高召回-高噪音】模式,是召回/精度的权衡;插件默认的质量优先规则把该权衡判向控制组。最大教训:单裁判非盲是真实且 material 的偏差源,盲评(双 agent 分离驱动与裁判)是 P3 结论可信的前提。样本仍小(n=3、全代码任务),结论须按此打折。"
+}
