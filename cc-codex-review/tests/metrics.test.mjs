@@ -63,6 +63,24 @@ test('aggregate: 求和;全有计时才给 total_wall_clock_ms', () => {
   assert.equal(a2.total_wall_clock_ms, null);
 });
 
+test('roundMetrics+aggregate: attempts 贯通,retried_rounds 计发生过重试的轮数', () => {
+  const m1 = roundMetrics({ round: 0, points: [] }, { remaining_issues: [], candidate_dispositions: [] }, { wall_clock_ms: 100, attempts: 2 });
+  assert.equal(m1.attempts, 2, 'attempts 必须进入度量记录(不被丢弃)');
+  const a = aggregate([
+    { round: 1, attempts: 1, wall_clock_ms: 100 },
+    { round: 2, attempts: 2, wall_clock_ms: 200 }, // 这轮重试过
+  ]);
+  assert.equal(a.retried_rounds, 1);
+});
+
+test('RTRY-001: attempts 不全时 retried_rounds=null(不把缺失当未重试而低估)', () => {
+  const a = aggregate([
+    { round: 1, attempts: 1, wall_clock_ms: 100 },
+    { round: 2, attempts: null, wall_clock_ms: 200 }, // 缺 attempts
+  ]);
+  assert.equal(a.retried_rounds, null, '部分缺 attempts → null,与 total_wall_clock_ms 同口径');
+});
+
 test('aggregateTasks: 跨任务聚合 + 平均轮数', () => {
   const t1 = [{ round: 1, new: 2, wall_clock_ms: 1000 }, { round: 2, new: 0, confirmed: 2, wall_clock_ms: 1000 }];
   const t2 = [{ round: 1, new: 3, wall_clock_ms: 500 }];

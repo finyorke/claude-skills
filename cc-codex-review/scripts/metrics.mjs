@@ -10,7 +10,8 @@
 //       revision_induced ⊆ new   (因上一轮修订才出现的新问题)
 //       stuck            ⊆ repeat (内容连续≥2 轮实质未变)
 //   - **confirmed/rejected** 单独计数(来自 candidate_dispositions,是"确认"不是 issue)。
-//   - **wall_clock_ms** 由 codex-round.mjs 每轮输出(真机耗时);成本 = 各轮之和。
+//   - **wall_clock_ms** 由 codex-round.mjs 每轮输出 = 本轮**交付**墙钟(含 bad_verdict 重试);成本 = 各轮之和。
+//     codex-round 另输出 `attempts`(>1 即发生过重试),用于观察重试开销而不污染总成本口径。
 import { pathToFileURL } from 'node:url';
 
 // 纯函数:给定上一轮 state + 本轮 round(codex 输出 + Claude 的标签)→ 本轮度量记录。
@@ -24,6 +25,7 @@ export function roundMetrics(prevState, round, opts = {}) {
   const st = new Set(round.stuck || []);
   const disp = round.candidate_dispositions || [];
   const wall = opts.wall_clock_ms ?? round.wall_clock_ms ?? null;
+  const attempts = opts.attempts ?? round.attempts ?? null;
   return {
     round: (prevState.round || 0) + 1,
     new: newIds.length,
@@ -33,6 +35,7 @@ export function roundMetrics(prevState, round, opts = {}) {
     confirmed: disp.filter((d) => d.disposition === 'confirmed').length,
     rejected: disp.filter((d) => d.disposition === 'rejected').length,
     wall_clock_ms: typeof wall === 'number' ? wall : null,
+    attempts: typeof attempts === 'number' ? attempts : null, // 来自 codex-round;>1 即本轮发生过重试
   };
 }
 
@@ -40,6 +43,7 @@ export function roundMetrics(prevState, round, opts = {}) {
 export function aggregate(records = []) {
   const sum = (k) => records.reduce((a, r) => a + (r[k] || 0), 0);
   const allTimed = records.length > 0 && records.every((r) => typeof r.wall_clock_ms === 'number');
+  const allAttempts = records.length > 0 && records.every((r) => typeof r.attempts === 'number');
   return {
     rounds: records.length,
     new: sum('new'),
@@ -49,6 +53,8 @@ export function aggregate(records = []) {
     confirmed: sum('confirmed'),
     rejected: sum('rejected'),
     total_wall_clock_ms: allTimed ? sum('wall_clock_ms') : null,
+    // 与 total_wall_clock_ms 同口径:attempts 不全则 null,不静默把缺失当"未重试"而低估(修 RTRY-001)。
+    retried_rounds: allAttempts ? records.filter((r) => r.attempts > 1).length : null,
   };
 }
 
@@ -64,6 +70,7 @@ export function aggregateTasks(taskRecordLists = []) {
     repeat: sum('repeat'), stuck: sum('stuck'),
     confirmed: sum('confirmed'), rejected: sum('rejected'),
     total_wall_clock_ms: allTimed ? sum('total_wall_clock_ms') : null,
+    retried_rounds: per.length > 0 && per.every((x) => typeof x.retried_rounds === 'number') ? sum('retried_rounds') : null,
     avg_rounds_per_task: per.length ? sum('rounds') / per.length : 0,
   };
 }
@@ -76,7 +83,7 @@ if (isMain) {
   const raw = await readStdin();
   const inp = raw.trim() ? JSON.parse(raw) : {};
   let out;
-  if (cmd === 'round-metrics') out = roundMetrics(inp.prevState || { round: 0, points: [] }, inp.round || {}, { wall_clock_ms: inp.wall_clock_ms });
+  if (cmd === 'round-metrics') out = roundMetrics(inp.prevState || { round: 0, points: [] }, inp.round || {}, { wall_clock_ms: inp.wall_clock_ms, attempts: inp.attempts });
   else if (cmd === 'aggregate') out = aggregate(inp.records || []);
   else if (cmd === 'aggregate-tasks') out = aggregateTasks(inp.tasks || []);
   else { process.stderr.write(`unknown cmd: ${cmd}\n`); process.exit(2); }

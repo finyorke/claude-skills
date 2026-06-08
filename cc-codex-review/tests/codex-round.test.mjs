@@ -46,6 +46,7 @@ test('fresh round: returns ok with thread_id and AGREE verdict', () => {
   assert.equal(res.thread_id, '019e1111-aaaa-7000-8000-000000000abc');
   assert.equal(res.verdict, 'AGREE');
   assert.deepEqual(res.remaining_issues, []);
+  assert.equal(res.attempts, 1, '一次成功 attempts=1');
 });
 
 test('fresh round: no --repo => -s read-only + --skip-git-repo-check, never --last', () => {
@@ -114,6 +115,7 @@ test('bad verdict then good: retries once and succeeds', () => {
   assert.equal(res.ok, true);
   assert.equal(res.verdict, 'CHANGES');
   assert.equal(res.remaining_issues.length, 1);
+  assert.equal(res.attempts, 2, 'wall_clock 含重试;attempts=2 让重试开销可观察');
 });
 
 test('stale verdict file must NOT be read as success when codex fails to write (#1)', () => {

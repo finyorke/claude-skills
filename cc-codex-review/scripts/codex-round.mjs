@@ -86,8 +86,10 @@ function main() {
   let threadId = null, verdict = null, rawMsg = '';
   let lastStatus = null, lastStdout = '', lastStderr = '';
   const startMs = Date.now(); // 本轮 wall-clock(供 P1 度量,见 scripts/metrics.mjs)
+  let attemptsMade = 0;        // 实际尝试次数(含 bad_verdict 重试),供观察重试开销
 
   for (let attempt = 0; attempt < 2; attempt++) {
+    attemptsMade++;
     // 每次尝试前都清掉旧的 verdict 文件,防止读到上一轮/上次尝试的残留导致假成功。
     if (existsSync(a.out)) unlinkSync(a.out);
     const res = spawnSync(bin, codexArgs, {
@@ -140,7 +142,10 @@ function main() {
     truncated: !!verdict.truncated,
     reviewed_scope: verdict.reviewed_scope || '',
     assumptions: verdict.assumptions,
-    wall_clock_ms: Date.now() - startMs, // P1 度量:本轮真机耗时
+    // P1 度量:本轮**交付**真机耗时——从首次尝试到成功,**含 bad_verdict 重试**(如实反映本轮真实墙钟成本)。
+    // 想区分"有效评审时间 vs 重试开销"时,用 attempts(>1 即发生过重试)来观察,不污染总成本口径。
+    wall_clock_ms: Date.now() - startMs,
+    attempts: attemptsMade,
   });
 }
 
