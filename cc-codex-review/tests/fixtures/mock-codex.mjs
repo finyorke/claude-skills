@@ -22,6 +22,12 @@ if (process.env.MOCK_FAIL === 'auth') {
   process.exit(1);
 }
 
+// 模拟 wrapper 脚本里 codex 缺失:status 127 + command not found(测 CR-UNAVAILABLE-127-WRAPPER)。
+if (process.env.MOCK_MISSING_127 === '1') {
+  process.stderr.write('codex: command not found\n');
+  process.exit(127);
+}
+
 function flagVal(flag) {
   const i = argv.indexOf(flag);
   return i >= 0 ? argv[i + 1] : null;
@@ -29,6 +35,22 @@ function flagVal(flag) {
 
 const outFile = flagVal('-o');
 const threadId = process.env.MOCK_THREAD_ID || '019e0000-0000-7000-8000-000000000001';
+
+// 模拟 auth 失败只出现在 --json stdout 事件里(stderr 干净、不写 -o),用于测 CR-UNAUTH-STDOUT。
+if (process.env.MOCK_AUTH_STDOUT === '1') {
+  process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: threadId }) + '\n');
+  process.stdout.write(JSON.stringify({ type: 'error', message: 'stream error: Not logged in. Run `codex login` to authenticate.' }) + '\n');
+  process.exit(1);
+}
+
+// 模拟"agent_message 文本里含 'unauthorized' 但并非 auth 失败"+ 写出非法 verdict:
+// 错误类事件里没有 auth,故应判 bad_verdict 而非 codex_unavailable(测 CR-UNAUTH-STDOUT-SCOPE)。
+if (process.env.MOCK_SCOPE_PROBE === '1') {
+  process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: threadId }) + '\n');
+  process.stdout.write(JSON.stringify({ type: 'item.completed', item: { id: 'i', type: 'agent_message', text: 'discussing unauthorized access as a content topic, not an auth failure' } }) + '\n');
+  if (outFile) writeFileSync(outFile, 'not-a-valid-verdict');
+  process.exit(0);
+}
 
 // 默认 verdict;可被 MOCK_VERDICT 覆盖
 let msg = process.env.MOCK_VERDICT

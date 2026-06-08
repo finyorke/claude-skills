@@ -302,6 +302,10 @@ LLM 循环难做单元测试,采用:
   - **首批实验结果(3 任务配对 A/B,数据见 `experiments/p3-runs.json`)**:经真 codex-round 循环跑了 T1=codex-round.mjs、T2=metrics.mjs、T3=review-state.mjs,各 arm A(对照)/B(--omission-check)。`experiment.mjs decide` → **`inconclusive`:质量未回退但成本互有增减(更优:有效 issue 增多;更差:总轮数上升、墙钟显著上升)**。明细:A 共 8 effective issue / B 共 16(**+100%**,含 T3 一个 A 完全没发现的 **blocker**:merge 绕过未决确认→假收敛);两臂**噪音均 0**(B 的遗漏检查硬约束防投机有效);两臂全部收敛、unnecessary_revisions 均 0;B 成本 +1 轮、墙钟 +52%(747s→1134s)。
     - **结论(打折看,n=3、单 Claude 非盲、全代码任务)**:遗漏检查是**深度/质量杠杆**(多挖真实问题、尤其严重项),**不是减轮杠杆**——**原 P3 假设"前置发现→减轮"未被支持**(B 反而略增轮、显著增时)。其价值在"高风险评审要挖深"时按需开启,而非默认。**任务依赖**:T2(metrics)两臂打平、无增益;T1/T3 增益显著(尤其成熟代码 T3 的 blocker)。
   - **⏳ 后续(可选)**:扩样到含**非代码任务**与**UNRESOLVED 样本**、引入**真盲评**(双人或双 Agent 分离驱动/裁判)以去除单 Claude 污染,再复核上述结论是否稳健。
+  - **副产品:P3 真审挖出的真实 bug 修复进度(均 Codex 互审到双 AGREE)**:
+    - ✅ **v0.8.1 收敛完整性**(review-state.mjs):RS-P2-010 merge 假收敛、RS-P2-013 CLI/canConverge fail-closed(详见上方 P2 条目)。
+    - ✅ **v0.8.2 codex-round.mjs 加固**:CR-CLOCK-MONOTONIC(hrtime 单调计时,wall 非负)、CR-UNAVAILABLE(ENOENT/127+command-not-found/stderr-auth 即时判 + stdout 错误事件后置判,去裸 127 误判)、CR-THREAD-ATTEMPT(thread_id 仅取成功尝试)、CR-OUT-OWNERSHIP(--out 不可删/不可读/目录型不崩溃、不读陈旧产物、main 顶层兜底一行 JSON)、CR-RETRY-DIAG(spawn_error 诊断)。
+    - ⏳ **backlog(中低优,多为标准管线不可达/独立模块边界)**:review-state(RS-P2-011 事件形状校验、RS-P2-012 validateState 缺 id/孤儿、RS-P2-014 嵌套别名、RS-P2-015 链式 merge 前置拒、RS-P2-016 空串覆盖、RS-P2-017 render 措辞)、metrics(MTR-NUM 数值域、MTR-ID、MET-ERR 失败轮次完整性、MET-TASK 空任务 avg)。
 - **P4 多视角复核**:**暂缓**——聚合/去重/冲突裁决/每镜头 candidate 状态/成本上限/收敛语义未定义,且与 §1 YAGNI 有张力。
 
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。

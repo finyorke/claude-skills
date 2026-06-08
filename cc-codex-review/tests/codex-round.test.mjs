@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -196,4 +196,62 @@ test('RS-P0-EXTRA: 含额外字段(additionalProperties)→ bad_verdict', () => 
   });
   assert.equal(res.ok, false, '额外顶层字段应被拒(schema 是 additionalProperties:false)');
   assert.equal(res.error, 'bad_verdict');
+});
+
+// ---- v0.8.2 codex-round 加固(CR-* bugs)----
+
+test('CR-UNAUTH-STDOUT: auth 失败只在 stdout 事件里也判 codex_unavailable(不误报 bad_verdict)', () => {
+  const res = runRound([], 'PACKET', { MOCK_AUTH_STDOUT: '1' });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'codex_unavailable');
+});
+
+test('CR-CLOCK-MONOTONIC: wall_clock_ms 为非负数(单调时钟,与 experiment.mjs 非负约束一致)', () => {
+  const res = runRound([], 'PACKET', {
+    MOCK_VERDICT: JSON.stringify({ verdict: 'AGREE', remaining_issues: [], candidate_dispositions: [], rationale: 'ok', truncated: false, reviewed_scope: 's', assumptions: [] }),
+  });
+  assert.equal(res.ok, true);
+  assert.equal(typeof res.wall_clock_ms, 'number');
+  assert.ok(res.wall_clock_ms >= 0, 'wall_clock_ms 不得为负');
+});
+
+test('CR-OUT-OWNERSHIP: --out 指向目录(不可写/不可删)不崩溃,仍输出一行结果 JSON', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cc-round-'));
+  const outDir = join(dir, 'out-as-dir');
+  mkdirSync(outDir); // --out 是个目录 → unlink/read 会抛,脚本须吞掉并协议化
+  const stdout = execFileSync('node', [ROUND, '--schema', SCHEMA, '--out', outDir], {
+    input: 'PACKET', encoding: 'utf8',
+    env: { ...process.env, CODEX_BIN: MOCK, MOCK_VERDICT: JSON.stringify({ verdict: 'AGREE', remaining_issues: [], candidate_dispositions: [], rationale: 'ok', truncated: false, reviewed_scope: 's', assumptions: [] }) },
+  });
+  const line = stdout.trim().split('\n').filter(Boolean).pop();
+  const res = JSON.parse(line); // 必须可解析(契约:始终一行结果 JSON)
+  assert.equal(res.ok, false, '不可读/写的 out → 无有效产出 → ok:false,而非抛 Node stack');
+});
+
+test('CR-UNAVAILABLE-127-WRAPPER: status127 + command-not-found → codex_unavailable', () => {
+  const res = runRound([], 'PACKET', { MOCK_MISSING_127: '1' });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'codex_unavailable');
+});
+
+test('CR-UNAUTH-STDOUT-SCOPE: agent_message 含 unauthorized 但无 auth 错误事件 → bad_verdict(不误判 unavailable)', () => {
+  const res = runRound([], 'PACKET', { MOCK_SCOPE_PROBE: '1' });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'bad_verdict', 'content 里的 unauthorized 不得被当 auth 失败');
+});
+
+test('CR-OUT-UNLINK-STALE: 不可删的旧 out + 本轮未写 → 不得当陈旧产物报成功', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cc-round-'));
+  const out = join(dir, 'last.json');
+  writeFileSync(out, JSON.stringify({ verdict: 'AGREE', remaining_issues: [], candidate_dispositions: [], rationale: 'STALE', truncated: false, reviewed_scope: 's', assumptions: [] }));
+  chmodSync(dir, 0o555); // 父目录只读 → unlink(out) 失败,旧文件留存
+  try {
+    const stdout = execFileSync('node', [ROUND, '--schema', SCHEMA, '--out', out], {
+      input: 'PACKET', encoding: 'utf8',
+      env: { ...process.env, CODEX_BIN: MOCK, MOCK_NO_WRITE: '1' },
+    });
+    const res = JSON.parse(stdout.trim().split('\n').filter(Boolean).pop());
+    assert.equal(res.ok, false, '不可删的旧合法 verdict 不得被当本轮成功');
+    assert.equal(res.error, 'bad_verdict');
+  } finally { chmodSync(dir, 0o755); }
 });
