@@ -165,6 +165,10 @@ export function validateRound(prevState, round) {
       const fp = mid.get(fid);
       if (!fp) errors.push(`merge from 未知 id: ${fid}`);
       else if (fp.state === 'merged') errors.push(`merge 来源 ${fid} 已是 merged(终态/被本批先合并),不可重复合并`);
+      // RS-P2-010:不得把未决点(open/candidate)合入已 agreed 的目标——否则该未决分歧随 merged 终态从
+      // open/candidate 计数消失,canConverge 据此放行 → 假收敛。要合入 agreed,来源也须已 agreed。
+      else if (into && into.state === 'agreed' && fp.state !== 'agreed')
+        errors.push(`merge: 不能把未决点 ${fid}(state=${fp.state})合入已 agreed 的 ${mg.into}(会使未决分歧凭空消失→假收敛)`);
       if (fid === mg.into) errors.push(`merge from 与 into 相同: ${fid}`);
     }
     const fromSeen = new Set();
@@ -227,12 +231,18 @@ export function validateState(state) {
 export const validate = validateState; // 向后兼容别名(结构校验)
 
 export function canConverge(state, codexVerdict, claudeAgree) {
+  // RS-P2-013-R3:导出函数本身也是收敛闸门,须与 CLI 同等 fail-closed —— 缺失/非数组 points 不得被当空账本放行。
+  if (!state || !Array.isArray(state.points)) return { converged: false, reasons: ['state.points 缺失或非数组(fail-closed 拒收敛)'] };
   const pts = state.points || [];
   const open = pts.filter((p) => p.state === 'open').length;
   const cand = pts.filter((p) => p.state === 'candidate').length;
   const reasons = [];
+  // RS-P2-013-R2:收敛闸门 fail-closed —— 结构非法(含未知 state、坏合并图)一律拒收敛,不依赖调用方先跑 validate-state;
+  // 否则状态为 'bogus' 等未知值的点不计入 open/candidate,会被静默漏掉而假收敛。
+  const vs = validateState(state);
+  if (!vs.ok) reasons.push(`state 结构非法(fail-closed 拒收敛): ${vs.errors.join('; ')}`);
   if (codexVerdict !== 'AGREE') reasons.push('Codex 未 AGREE');
-  if (!claudeAgree) reasons.push('Claude 仍持异议');
+  if (claudeAgree !== true) reasons.push('Claude 仍持异议'); // RS-P2-013:仅严格布尔 true 算同意(杜绝 'false'/真值非 true 误判为同意→假收敛)
   if (cand > 0) reasons.push(`仍有 ${cand} 个 candidate 未被确认(收敛时须为空)`);
   if (open > 0) reasons.push(`仍有 ${open} 个 open 分歧`);
   return { converged: reasons.length === 0, reasons };
@@ -300,14 +310,28 @@ const isMain = import.meta.url === pathToFileURL(process.argv[1] || '').href;
 if (isMain) {
   const cmd = process.argv[2];
   const raw = await readStdin();
-  const inp = raw.trim() ? JSON.parse(raw) : {};
+  const emit = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+  let inp;
+  try { inp = raw.trim() ? JSON.parse(raw) : {}; }
+  catch (e) { emit({ ok: false, error: 'bad_json', detail: String(e.message || e) }); process.exit(2); } // RS-P2-013:坏 stdin → 协议化错误,不抛 Node stack
   let out;
-  if (cmd === 'reduce') out = reduce(inp.prevState || emptyState(), inp.round || {});
-  else if (cmd === 'validate-round') out = validateRound(inp.prevState || emptyState(), inp.round || {});
-  else if (cmd === 'validate-state') out = validateState(inp.state || emptyState());
-  else if (cmd === 'converge') out = canConverge(inp.state || emptyState(), inp.codexVerdict, !!inp.claudeAgree);
-  else if (cmd === 'counts') out = counts(inp.state || emptyState());
-  else if (cmd === 'render-unresolved') out = { text: renderUnresolved(inp.state || emptyState(), inp.meta || {}) };
-  else { process.stderr.write(`unknown cmd: ${cmd}\n`); process.exit(2); }
-  process.stdout.write(JSON.stringify(out) + '\n');
+  try {
+    // RS-P2-013-R1:reduce/validate-round 须显式 prevState.points——漏传会静默清空历史、产出空账本,再喂 converge 即假收敛。
+    // 首轮由调用方显式传 emptyState()({round:0,points:[]}),使"漏传"始终是错误而非默认放行。
+    if (cmd === 'reduce' || cmd === 'validate-round') {
+      if (!inp.prevState || !Array.isArray(inp.prevState.points)) { emit({ ok: false, error: 'missing_prevstate', detail: cmd + ' 需显式 prevState.points;首轮传 {round:0,points:[]}(防漏传清空历史→假收敛)' }); process.exit(2); }
+      out = cmd === 'reduce' ? reduce(inp.prevState, inp.round || {}) : validateRound(inp.prevState, inp.round || {});
+    }
+    else if (cmd === 'validate-state') out = validateState(inp.state || emptyState());
+    else if (cmd === 'converge') {
+      // RS-P2-013:converge 必须拿到显式 state.points——绝不对缺省空账本判收敛(否则缺 state 即假收敛)。
+      if (!inp.state || !Array.isArray(inp.state.points)) { emit({ ok: false, error: 'missing_state', detail: 'converge 需显式 state.points;拒绝对缺省空账本判收敛(防假收敛)' }); process.exit(2); }
+      if (typeof inp.claudeAgree !== 'boolean') { emit({ ok: false, error: 'bad_claudeAgree', detail: "claudeAgree 须为布尔 true/false(收到 " + JSON.stringify(inp.claudeAgree) + ")" }); process.exit(2); }
+      out = canConverge(inp.state, inp.codexVerdict, inp.claudeAgree);
+    }
+    else if (cmd === 'counts') out = counts(inp.state || emptyState());
+    else if (cmd === 'render-unresolved') out = { text: renderUnresolved(inp.state || emptyState(), inp.meta || {}) };
+    else { process.stderr.write(`unknown cmd: ${cmd}\n`); process.exit(2); }
+  } catch (e) { emit({ ok: false, error: 'exception', detail: String(e.message || e) }); process.exit(1); }
+  emit(out);
 }

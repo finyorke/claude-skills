@@ -177,7 +177,8 @@ test('canConverge: candidate 非空 → 不可收敛(防假 RESOLVED)', () => {
 });
 
 test('canConverge: 全 agreed/merged + 双 AGREE → 收敛', () => {
-  const r = canConverge({ round: 3, points: [{ id: 'I1', state: 'agreed' }, { id: 'I2', state: 'merged', merged_into: 'I1' }] }, 'AGREE', true);
+  // 注:merged 点须互易(I1.merged_from 含 I2),否则 fail-closed 闸门(RS-P2-013-R2)会因结构非法拒收敛。
+  const r = canConverge({ round: 3, points: [{ id: 'I1', state: 'agreed', merged_from: ['I2'] }, { id: 'I2', state: 'merged', merged_into: 'I1' }] }, 'AGREE', true);
   assert.equal(r.converged, true);
 });
 
@@ -433,4 +434,107 @@ test('validateRound: remaining_issues / adopted 数组内重复 id 被拒(RS-P2-
   const r2 = validateRound(prev, { remaining_issues: [{ id: 'O1', title: 't', severity: 'major' }], adopted: ['O1', 'O1'] });
   assert.equal(r2.ok, false);
   assert.match(r2.errors.join('\n'), /adopted 含重复 id: O1/);
+});
+
+// ---- v0.8.1 加固:收敛完整性(RS-P2-010 merge 假收敛 / RS-P2-013 CLI+canConverge)----
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+const RS_CLI = fileURLToPath(new URL('../scripts/review-state.mjs', import.meta.url));
+function rsCli(cmd, inp) {
+  const r = spawnSync(process.execPath, [RS_CLI, cmd], { input: JSON.stringify(inp), encoding: 'utf8' });
+  return { status: r.status, out: r.stdout.trim() ? JSON.parse(r.stdout.trim()) : null };
+}
+
+test('RS-P2-010: 不能把 open/candidate 合入已 agreed 目标(防 merge 假收敛)', () => {
+  const prev = { round: 2, points: [
+    { id: 'A1', state: 'agreed', severity: 'major', title: 'a' },
+    { id: 'O1', state: 'open', severity: 'major', title: 'o' },
+    { id: 'C1', state: 'candidate', severity: 'major', title: 'c' },
+  ] };
+  const openIntoAgreed = validateRound(prev, { remaining_issues: [], candidate_dispositions: [{ id: 'C1', disposition: 'confirmed' }], merges: [{ from: ['O1'], into: 'A1' }] });
+  assert.equal(openIntoAgreed.ok, false);
+  assert.match(openIntoAgreed.errors.join('\n'), /不能把未决点 O1.*合入已 agreed/);
+});
+
+test('RS-P2-010: candidate 合入 agreed 同样被拒', () => {
+  const prev = { round: 2, points: [
+    { id: 'A1', state: 'agreed', severity: 'major', title: 'a' },
+    { id: 'C1', state: 'candidate', severity: 'major', title: 'c' },
+  ] };
+  // 本轮先把 C1 留作未裁定会触发覆盖错误,这里单测 merge 守门:给 C1 一个 confirmed 使其在中间态成 agreed 前——
+  // 但 merge 在 dispositions 之后的中间态检查,故用一个不被 disposition 改动的 candidate 更直接:
+  const prev2 = { round: 2, points: [
+    { id: 'A1', state: 'agreed', severity: 'major', title: 'a' },
+    { id: 'C2', state: 'candidate', severity: 'major', title: 'c2' },
+  ] };
+  const r = validateRound(prev2, { remaining_issues: [{ id: 'C2', title: 'c2', severity: 'major' }], candidate_dispositions: [{ id: 'C2', disposition: 'rejected' }], merges: [{ from: ['C2'], into: 'A1' }] });
+  // C2 被 rejected → 中间态回 open → open 合入 agreed,仍应被拒
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /不能把未决点 C2.*合入已 agreed/);
+});
+
+test('RS-P2-010: open 合入 open / agreed 合入 agreed 合法', () => {
+  const prevOO = { round: 2, points: [
+    { id: 'O1', state: 'open', severity: 'major', title: 'o1' },
+    { id: 'O2', state: 'open', severity: 'major', title: 'o2' },
+  ] };
+  assert.equal(validateRound(prevOO, { remaining_issues: [], merges: [{ from: ['O1'], into: 'O2' }] }).ok, true);
+  const prevAA = { round: 2, points: [
+    { id: 'A1', state: 'agreed', severity: 'major', title: 'a1' },
+    { id: 'A2', state: 'agreed', severity: 'major', title: 'a2' },
+  ] };
+  assert.equal(validateRound(prevAA, { remaining_issues: [], merges: [{ from: ['A1'], into: 'A2' }] }).ok, true);
+});
+
+test('RS-P2-013: canConverge 仅严格 true 算同意(字符串/真值非 true 不收敛)', () => {
+  const st = { round: 3, points: [{ id: 'I1', state: 'agreed' }] };
+  assert.equal(canConverge(st, 'AGREE', true).converged, true);
+  assert.equal(canConverge(st, 'AGREE', 'false').converged, false, "字符串 'false' 不得被当同意");
+  assert.equal(canConverge(st, 'AGREE', 1).converged, false);
+  assert.equal(canConverge(st, 'AGREE', undefined).converged, false);
+});
+
+test('RS-P2-013: CLI converge 缺 state → missing_state(不对空账本判收敛)', () => {
+  const r = rsCli('converge', { codexVerdict: 'AGREE', claudeAgree: true });
+  assert.equal(r.out.error, 'missing_state');
+});
+
+test('RS-P2-013: CLI converge claudeAgree 非布尔 → bad_claudeAgree', () => {
+  const r = rsCli('converge', { state: { round: 1, points: [] }, codexVerdict: 'AGREE', claudeAgree: 'false' });
+  assert.equal(r.out.error, 'bad_claudeAgree');
+});
+
+test('RS-P2-013: CLI 坏 JSON → bad_json(不抛 Node stack)', () => {
+  const r = spawnSync(process.execPath, [RS_CLI, 'reduce'], { input: '{not json', encoding: 'utf8' });
+  const out = JSON.parse(r.stdout.trim());
+  assert.equal(out.error, 'bad_json');
+});
+
+test('RS-P2-013-R1: CLI reduce/validate-round 缺 prevState → missing_prevstate(防漏传清空历史)', () => {
+  const r1 = rsCli('reduce', { round: { remaining_issues: [] } }); // 无 prevState
+  assert.equal(r1.out.error, 'missing_prevstate');
+  const r2 = rsCli('validate-round', { round: { remaining_issues: [] } });
+  assert.equal(r2.out.error, 'missing_prevstate');
+  // 首轮显式传 emptyState → 正常工作
+  const ok = rsCli('reduce', { prevState: { round: 0, points: [] }, round: { remaining_issues: [{ id: 'I1', title: 't', detail: 'd', severity: 'major' }] } });
+  assert.equal(ok.out.round, 1);
+  assert.equal(ok.out.points.length, 1);
+});
+
+test('RS-P2-013-R2: canConverge 对畸形/未知 state 的点 fail-closed(不假收敛)', () => {
+  const bogus = { round: 3, points: [{ id: 'I1', state: 'bogus' }] };
+  const r = canConverge(bogus, 'AGREE', true);
+  assert.equal(r.converged, false, '未知 state 不得被漏掉而假收敛');
+  assert.match(r.reasons.join('\n'), /结构非法/);
+  // CLI 同样 fail-closed
+  const c = rsCli('converge', { state: bogus, codexVerdict: 'AGREE', claudeAgree: true });
+  assert.equal(c.out.converged, false);
+});
+
+test('RS-P2-013-R3: canConverge 函数对缺/非数组 points fail-closed(与 CLI 一致)', () => {
+  assert.equal(canConverge({ round: 1 }, 'AGREE', true).converged, false);
+  assert.equal(canConverge({ round: 1, points: null }, 'AGREE', true).converged, false);
+  assert.match(canConverge({ round: 1 }, 'AGREE', true).reasons.join('\n'), /points 缺失或非数组/);
+  // 正常显式空账本(真无 issue)仍可收敛
+  assert.equal(canConverge({ round: 1, points: [] }, 'AGREE', true).converged, true);
 });

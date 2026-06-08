@@ -111,6 +111,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   - `converge`(`{state, codexVerdict, claudeAgree}`):收敛闸门——candidate / open 非空一律拒(防假 RESOLVED)。
   - `render-unresolved`(`{state, meta}`):出四段块。
   - state 只在本次循环内传递、不持久化(守 §1);语义决策与分歧标注(annotations)仍由你(Claude)给,脚本不自行判断(守 §2)。
+  - **每次 CLI 调用都须显式传 state(防漏传清空历史→假收敛,RS-P2-013-R1)**:`reduce`/`validate-round` 必须带 `prevState.points`(**第 1 轮显式传 `{"round":0,"points":[]}`**,不可省略);`converge` 必须带 `state.points` 且 `claudeAgree` 为严格布尔。脚本对缺省/坏输入返回 `{ok:false,error:...}` 而非默认放行。
 - **每轮记 P1 度量(`${CLAUDE_PLUGIN_ROOT}/scripts/metrics.mjs`)**:reduce 之后调 `round-metrics`(传 `prevState` + 本轮 `round`〔含你给的语义标签 `revision_induced`/`stuck`〕+ codex-round 输出的 `wall_clock_ms` 与 `attempts`)得本轮记录;循环结束 `aggregate` 汇总(含 `retried_rounds`=发生过重试的轮数)。`new/repeat` 由 id 是否在 prevState 出现**确定性判定**;`revision_induced`(⊆new:因上轮修订才出现)/`stuck`(⊆repeat:连续≥2 轮实质未变)由你据实标注。用于"轮次耗在新发现 vs 确认 vs 反复"的数据化复盘(跨 ≥3 个真实任务用 `aggregate-tasks`)。
 
 每轮:
