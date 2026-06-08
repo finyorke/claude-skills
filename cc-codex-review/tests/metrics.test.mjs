@@ -112,3 +112,57 @@ test('MTR-ID-001: remaining_issues 重复/空 id 不双计', () => {
 test('MET-TASK-001: aggregateTasks([]) avg_rounds_per_task=null(0 任务无均值)', () => {
   assert.equal(aggregateTasks([]).avg_rounds_per_task, null);
 });
+
+// ---- v0.8.4 MET-ERR-001:失败/中断轮次的完整性 ----
+test('MET-ERR-001: 有轮次开始却未记入(records < expectedRounds)→ complete:false 且 total 归 null', () => {
+  const recs = [{ round: 1, new: 2, wall_clock_ms: 1000, attempts: 1 }]; // 只记到 1 轮
+  const incomplete = aggregate(recs, { expectedRounds: 2 }); // 实际开始了 2 轮(第 2 轮 bad_verdict 中断未记)
+  assert.equal(incomplete.complete, false);
+  assert.equal(incomplete.expected_rounds, 2);
+  assert.equal(incomplete.total_wall_clock_ms, null, '缺轮不得伪装成完整成本');
+  assert.equal(incomplete.retried_rounds, null);
+  // 记全则正常
+  const complete = aggregate(recs, { expectedRounds: 1 });
+  assert.equal(complete.complete, true);
+  assert.equal(complete.total_wall_clock_ms, 1000);
+});
+
+test('MET-ERR-001: 不传 expectedRounds 时按完整处理(向后兼容)', () => {
+  const a = aggregate([{ round: 1, wall_clock_ms: 1000, attempts: 1 }]);
+  assert.equal(a.complete, true);
+  assert.equal(a.expected_rounds, null);
+  assert.equal(a.total_wall_clock_ms, 1000);
+});
+
+test('MET-ERR-001: aggregateTasks 任一任务不完整 → 总 total 归 null', () => {
+  const t1 = [{ round: 1, wall_clock_ms: 1000, attempts: 1 }];
+  const t2 = [{ round: 1, wall_clock_ms: 500, attempts: 1 }];
+  const a = aggregateTasks([t1, t2], { expectedRounds: [1, 2] }); // t2 开始 2 轮只记 1
+  assert.equal(a.complete, false);
+  assert.equal(a.total_wall_clock_ms, null);
+});
+
+test('MET-ERR-001-R1: 非法/不一致 expectedRounds → fail-closed(complete:false, total null)', () => {
+  const recs = [{ round: 1, wall_clock_ms: 1000, attempts: 1 }];
+  for (const bad of ['2', -1, 1.5, {}]) {
+    const a = aggregate(recs, { expectedRounds: bad });
+    assert.equal(a.complete, false, `expectedRounds=${JSON.stringify(bad)} 应 fail-closed`);
+    assert.equal(a.total_wall_clock_ms, null);
+  }
+  // records 多于已开始轮数(不一致)→ fail-closed
+  const more = aggregate([{ round: 1, wall_clock_ms: 1, attempts: 1 }, { round: 2, wall_clock_ms: 1, attempts: 1 }], { expectedRounds: 1 });
+  assert.equal(more.complete, false);
+  // expectedRounds=0:空记录一致,非空不一致
+  assert.equal(aggregate([], { expectedRounds: 0 }).complete, true);
+  assert.equal(aggregate(recs, { expectedRounds: 0 }).complete, false);
+});
+
+test('MET-ERR-001-R2: aggregateTasks expectedRounds 数组缺项/错位 → fail-closed', () => {
+  const t1 = [{ round: 1, wall_clock_ms: 1000, attempts: 1 }];
+  const t2 = [{ round: 1, wall_clock_ms: 500, attempts: 1 }];
+  const short = aggregateTasks([t1, t2], { expectedRounds: [1] }); // 数组短于任务数
+  assert.equal(short.complete, false);
+  assert.equal(short.total_wall_clock_ms, null);
+  const notArr = aggregateTasks([t1, t2], { expectedRounds: 2 }); // 非数组
+  assert.equal(notArr.complete, false);
+});

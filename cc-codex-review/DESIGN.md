@@ -306,7 +306,7 @@ LLM 循环难做单元测试,采用:
     - ✅ **v0.8.1 收敛完整性**(review-state.mjs):RS-P2-010 merge 假收敛、RS-P2-013 CLI/canConverge fail-closed(详见上方 P2 条目)。
     - ✅ **v0.8.2 codex-round.mjs 加固**:CR-CLOCK-MONOTONIC(hrtime 单调计时,wall 非负)、CR-UNAVAILABLE(ENOENT/127+command-not-found/stderr-auth 即时判 + stdout 错误事件后置判,去裸 127 误判)、CR-THREAD-ATTEMPT(thread_id 仅取成功尝试)、CR-OUT-OWNERSHIP(--out 不可删/不可读/目录型不崩溃、不读陈旧产物、main 顶层兜底一行 JSON)、CR-RETRY-DIAG(spawn_error 诊断)。
     - ✅ **v0.8.3 review-state 余项 + metrics 加固**(Codex 互审 3 轮收敛):review-state——RS-P2-011 validateRound 事件**形状契约**(数组/元素形状 + remaining_issues 的 title/detail/severity 类型,severity 用 `Object.hasOwn` 防原型绕过;adopted/rebutted/annotations 元数据约束为 string,既消除别名又杜绝不可克隆值)、RS-P2-012 validateState 缺 id/活跃点孤儿 merged_into/非对象点 fail-closed、RS-P2-014 meta 深拷贝(structuredClone)、RS-P2-015 链式 merge 前置拒、RS-P2-016 空串覆盖、RS-P2-017 render 措辞;metrics——MTR-NUM 数值域(有限非负 wall/整数≥1 attempts)、MTR-ID id 集合语义去重、MET-TASK 空任务 avg→null。全套 118 绿。
-    - ⏳ **仅剩 MET-ERR-001(deferred,设计层)**:失败/中断轮次的"完整性"应由 review.md 协议层(round 计数 / aggregate 的 expected_rounds)处理,非 metrics.mjs 纯函数 bug——留作 review.md 协议增强项。
+    - ✅ **v0.8.4 MET-ERR-001**(Codex 互审 2 轮收敛):aggregate/aggregateTasks 加 `expectedRounds`(已开始轮数)+ `complete` 标志,**fail-closed**——某轮 bad_verdict/unavailable 中断致 `records.length < expectedRounds`、或非法/不一致 expectedRounds(非非负整数、records≠expected、跨任务数组非等长)→ `complete:false` 且 `total_wall_clock_ms`/`retried_rounds` 归 null,不拿残缺记录伪装完整成本;review.md §6 指示汇总时传入已开始轮数。**至此 P3 实验真审发现的 bug 全部修复(v0.8.1~v0.8.4)。**
 - **P4 多视角复核**:**暂缓**——聚合/去重/冲突裁决/每镜头 candidate 状态/成本上限/收敛语义未定义,且与 §1 YAGNI 有张力。
 
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。

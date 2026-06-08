@@ -1,6 +1,6 @@
 {
   "name": "cc-codex-review",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "Claude × Codex 收敛互审 — 两方迭代复核,收敛于双方 AGREE,否则到顶/停滞产出 UNRESOLVED",
   "author": {
     "name": "finyorke"
