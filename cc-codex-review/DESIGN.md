@@ -236,6 +236,7 @@ cc-codex-review/
   commands/review.md                # 命令体 = Claude 执行的互审协议
   scripts/codex-round.mjs           # 单轮 Codex 调用原语(确定性,可单测)
   scripts/review-state.mjs          # 共识账本无状态 reducer/validator/render(P2,§12)
+  scripts/metrics.mjs               # dogfood 逐轮/跨任务度量(P1,§12)
   schemas/verdict.schema.json        # verdict 结构化输出 schema(strict 模式)
   tests/                            # codex-round / review-state 单测 + 假 codex + schema strict 守护
   README.md / DESIGN.md             # 文档(PLAN.md 已于 v0.3.0 移除,历史见 git log)
@@ -285,13 +286,13 @@ LLM 循环难做单元测试,采用:
 
 ## 12. 效果提升路线图(经 Claude×Codex 互审收敛)
 
-> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0,v0.5.1 加固);P1 未开始;P3/P4 未做(P4 暂缓)**。优先级与语义经对抗式互审锁定。
+> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0/v0.5.1/v0.6.0);P1 🟡 instrumentation 已实现(v0.7.0)、真机数据采集待做;P3/P4 未做(P4 暂缓)**。优先级与语义经对抗式互审锁定。
 
 - **P0 结构化协议(P2 的前置)— ✅ 已实现(v0.4.0)**:`verdict.schema.json` 已加 `remaining_issues[].id`(稳定 point_id)+ `candidate_dispositions[] = {id, disposition: confirmed|rejected}`(**事件**,非状态,首轮空数组);`codex-round.mjs` 已透传这两个字段(冒烟曾发现并修复其被 cherry-pick 丢弃;并收紧:缺 required 数组字段 → `bad_verdict` 不静默默认);`review.md` 已指示 Codex 产出 id/dispositions 并据此晋升;`rejected` 的点用同一 id 留在 remaining_issues。真机两轮 dogfood 验证 confirmed/rejected + id 跨轮稳定。
   - `state ∈ {open, candidate, agreed, merged}`(持久)、合并血缘 `merged_from/merged_into`、覆盖/未知ID/状态机不变量校验属 **Claude 侧账本**,由 P2 `review-state.mjs` 维护,**不进 Codex 输出 schema**(Codex 不拥有状态)。
   - **范围说明**:`parent_id`(拆分谱系)无实际用例、无 reduce 写入路径,已按 YAGNI 剔除(仅保留 merge 血缘)。id 跨轮稳定由 prompt 约束 + 数组内去重保障,未做强制的跨会话稳定性校验。
   - 状态迁移(P2 reducer 实现):`open`─(adopted 采纳 / rebutted 反驳)→`candidate`─(Codex confirmed)→`agreed`;`candidate`─(Codex rejected)→`open`;`agreed`─(重新质疑)→`open`;point─(合并)→`merged`(终态)。**反驳路径(RS-P2-OPEN)**:Claude 反驳的 open issue 也进 candidate 待 Codex 裁定,confirmed=接受反驳→agreed,使"反驳成功"的点能了结、循环可收敛。
-- **P1 dogfood 度量(数据驱动后续优先级)**:每轮 Claude 标注**互斥主类** `new|repeat` + **正交标签** `revision-induced`(贴 new)/`stuck`(贴 repeat);`confirmed/rejected` 单独计数;包装器记每轮 wall-clock(token 据实可选)。≥3 个真实任务取样。
+- **P1 dogfood 度量(数据驱动后续优先级)— 🟡 instrumentation 已实现(v0.7.0),数据采集待真机**:`scripts/metrics.mjs`(`roundMetrics`/`aggregate`/`aggregateTasks` + CLI)实现——每轮 `new|repeat` 由 id 是否在 prevState 出现**确定性判定**,正交标签 `revision_induced`(⊆new)/`stuck`(⊆repeat)由 Claude 据实标注且只计交集(防误标膨胀),`confirmed/rejected` 单独计数;`codex-round.mjs` 每轮输出 `wall_clock_ms`(成本=各轮之和,全轮有计时才汇总);review.md §6 已挂"每轮记度量"。**⏳ 待办**:用真 `/cc-codex-review:review` 跑 ≥3 个真实任务采集可信数据(必须经真实循环,不能手工驱动,否则测的是"Claude 手动"而非插件——见 RS-INT-001)。
 - **P2 `review-state.mjs`(无状态纯函数,守 §1/§2)— ✅ 已实现(v0.5.0)**:导出 `reduce`(上一轮 state + 语义决策 adopted/dispositions/merges → 新 state,纯函数不改入参)/`validate`(id 唯一、合并完整性、disposition 覆盖与未知 id)/`canConverge`(candidate 非空即拒,防假 RESOLVED)/`renderUnresolved`(四段块)/`counts`,并配薄 CLI(stdin JSON → stdout JSON)。**接收 codex-round.mjs 的结构化结果、不重复解析 stdout、不持久化、不驱动循环**;状态机全部迁移由它据传入语义决策施加。单测覆盖全部迁移/不变量/收敛/渲染;review.md §6 已将其设为**每轮必经管线**(见下「集成已闭合」)。**补齐了 P0 留给 P2 的 state + 合并血缘 + validator**(`parent_id` 拆分谱系按 YAGNI 不做,见 P0 范围说明)。v0.5.1 经 Codex 代码互审 6 轮、修复 9 个边界 bug(RS-P2-001..009:validator 拆 validateRound/validateState 按中间态校验、合并图链/环/双向 reciprocity/去重、merged 终态 zombie issue、annotation/数组 id 校验、候选元数据跨采纳清除、CLI pathToFileURL)。随后一次「完成度」互审又补:**反驳路径(RS-P2-OPEN,见上)**、`rebutted` 输入与校验、§6 取消"AGREE 隐式确认"改为一律靠结构化 disposition、codex-round 收紧 boundary、§12 状态修订、parent_id 剔除。review-state 单测增至约 40 条。
   - **集成已闭合**:review.md §6 改为**每轮必经管线 `validate-round → reduce → validate-state → converge`**(不再"可委托"、不再散文手工记账);真机 E2E 已跑通——两轮真 codex 输出经 review-state CLI 驱动:采纳/反驳→candidate、Codex 裁定 confirmed/rejected→agreed/回 open、converge 闸门正确(rejected 回流后拒收敛);并加 hermetic 集成测试(canned verdict 跑完整管线 + "AGREE 但 candidate 未覆盖→拒收敛"),可重放。review-state 单测约 46 条(全套 56)。
 - **P3 首轮遗漏检查实验**:第 1 轮追加**一次**"针对当前证据与目标的遗漏检查"(**不**预判投机二阶问题、**不**输出 completeness 自评分)。A/B:同任务等额轮数预算配对运行、**纳入 UNRESOLVED 样本**、未收敛率作门禁指标、相同预算快照统一比较(converged/有效issue/噪音/Σwall-clock);"有效 issue" 须经**盲评或固定 rubric 终局复核**(仅"被采纳"不算),并记反向指标"不必要修订"。质量优先决策规则。

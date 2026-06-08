@@ -85,6 +85,7 @@ function main() {
   const codexArgs = buildCodexArgs(a);
   let threadId = null, verdict = null, rawMsg = '';
   let lastStatus = null, lastStdout = '', lastStderr = '';
+  const startMs = Date.now(); // 本轮 wall-clock(供 P1 度量,见 scripts/metrics.mjs)
 
   for (let attempt = 0; attempt < 2; attempt++) {
     // 每次尝试前都清掉旧的 verdict 文件,防止读到上一轮/上次尝试的残留导致假成功。
@@ -139,6 +140,7 @@ function main() {
     truncated: !!verdict.truncated,
     reviewed_scope: verdict.reviewed_scope || '',
     assumptions: verdict.assumptions,
+    wall_clock_ms: Date.now() - startMs, // P1 度量:本轮真机耗时
   });
 }
 
