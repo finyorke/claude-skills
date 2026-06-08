@@ -286,7 +286,7 @@ LLM 循环难做单元测试,采用:
 
 ## 12. 效果提升路线图(经 Claude×Codex 互审收敛)
 
-> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0/v0.5.1/v0.6.0);P1 🟡 instrumentation 已实现(v0.7.0)、真机数据采集待做;P3 ✅ 脚手架(v0.8.0)+ 首批 3 任务 A/B 实验已采,且经独立盲评复核(结论:omission-check 高召回-高噪音,质量优先 decide=keep_A,不宜默认开启);P4 未做(暂缓)**。优先级与语义经对抗式互审锁定。
+> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0/v0.5.1/v0.6.0);P1 🟡 instrumentation 已实现(v0.7.0)、真机数据采集待做;P3 ✅ 脚手架(v0.8.0)+ A/B 实验(盲评,budget-6 共 4 任务含非代码 + budget-2 UNRESOLVED 样本):omission-check 高召回但精度优先 decide=keep_A,代码评审不宜默认开、但推荐用于提案/设计文档评审;P4 未做(暂缓)**。优先级与语义经对抗式互审锁定。
 
 - **P0 结构化协议(P2 的前置)— ✅ 已实现(v0.4.0)**:`verdict.schema.json` 已加 `remaining_issues[].id`(稳定 point_id)+ `candidate_dispositions[] = {id, disposition: confirmed|rejected}`(**事件**,非状态,首轮空数组);`codex-round.mjs` 已透传这两个字段(冒烟曾发现并修复其被 cherry-pick 丢弃;并收紧:缺 required 数组字段 → `bad_verdict` 不静默默认);`review.md` 已指示 Codex 产出 id/dispositions 并据此晋升;`rejected` 的点用同一 id 留在 remaining_issues。真机两轮 dogfood 验证 confirmed/rejected + id 跨轮稳定。
   - `state ∈ {open, candidate, agreed, merged}`(持久)、合并血缘 `merged_from/merged_into`、覆盖/未知ID/状态机不变量校验属 **Claude 侧账本**,由 P2 `review-state.mjs` 维护,**不进 Codex 输出 schema**(Codex 不拥有状态)。
@@ -302,7 +302,7 @@ LLM 循环难做单元测试,采用:
   - **首批实验结果(3 任务配对 A/B,数据见 `experiments/p3-runs.json`)**:经真 codex-round 循环跑了 T1=codex-round.mjs、T2=metrics.mjs、T3=review-state.mjs,各 arm A(对照)/B(--omission-check)。`experiment.mjs decide` → **`inconclusive`:质量未回退但成本互有增减(更优:有效 issue 增多;更差:总轮数上升、墙钟显著上升)**。明细:A 共 8 effective issue / B 共 16(**+100%**,含 T3 一个 A 完全没发现的 **blocker**:merge 绕过未决确认→假收敛);两臂**噪音均 0**(B 的遗漏检查硬约束防投机有效);两臂全部收敛、unnecessary_revisions 均 0;B 成本 +1 轮、墙钟 +52%(747s→1134s)。
     - **结论(初版,非盲)**:decide=inconclusive,遗漏检查像是"深度杠杆、非减轮杠杆"。**但此读数已被下方盲评复核推翻——见 🔬。**
     - **🔬 盲评复核(更新结论,数据见 `experiments/p3-blind-rescore.json`)**:攻掉头号方法学缺陷(单 Claude 既驱动又当 effective 裁判)。把 24 条 issue 去标识打乱、交独立子 agent 按固定 rubric 盲评,重算 → **`decide=keep_A`(strict pooled 与 fairness-adjusted 两种解读一致)**。即:① 非盲单裁判把**全部** issue 判 effective(noise=0),**系统性高估 B**;② 独立盲评发现真噪音存在且更集中在 B(alias 无触发、链式 merge 排序 nit、retry 主题过度细分);③ 即便公平性校正(B 召回更高:13 vs 7 真 bug),B 仍带更多绝对噪音 → 质量优先规则(不拿噪音换数量)选对照组 A。**修正定性:omission-check 是【高召回-高噪音】模式(召回/精度权衡),插件默认质量优先规则把它判向控制组,不宜默认开启。** 最大教训:**单裁判非盲是 material 偏差源,双 agent 分离驱动/裁判的真盲评是 P3 结论可信的前提**;样本仍小(n=3、全代码),结论按此打折。
-  - **⏳ 后续(可选)**:扩样到含**非代码任务**与**UNRESOLVED 样本**、引入**真盲评**(双人或双 Agent 分离驱动/裁判)以去除单 Claude 污染,再复核上述结论是否稳健。
+  - **🔬 真盲评扩样(第二批,数据见 `experiments/p3-extension.json`)**:用双 agent 盲评流程补两类缺口——**非代码任务**(T4 提案评审)+ **UNRESOLVED 样本**(T5 决策提案,budget=2)。结果:① budget-6 快照扩到 **4 任务(含非代码)**、盲评后 `decide=keep_A` **仍成立**(B 绝对噪音 +2);但更细的画面是 **B 一致更高召回**(4 任务 26 vs 15 有效 issue,多 73%,含 A 漏掉的 T3 blocker 与 T4 提案的聚合/冲突/状态/收敛空白),keep_A 由插件**精度优先/零噪音容忍**的绝对噪音闸门驱动 = **召回/精度权衡**,非"B 无价值"。② **任务类型重要**:**非代码提案评审上 omission-check 几乎无真噪音、价值明显更高**(设计文档的空白正是其靶心);代码评审上才出现噪音。③ **UNRESOLVED(T5,budget 2)**:两臂都到顶不收敛 → 遗漏检查增加"发现"而非"收敛速度",紧预算下无助收敛。**修订建议:omission-check 不宜代码评审默认开,但值得作为「提案/设计文档评审」或「需高召回深挖」场景的推荐开关。** 样本仍小(代码 3 + 非代码 1 + UNRESOLVED 1)。
   - **副产品:P3 真审挖出的真实 bug 修复进度(均 Codex 互审到双 AGREE)**:
     - ✅ **v0.8.1 收敛完整性**(review-state.mjs):RS-P2-010 merge 假收敛、RS-P2-013 CLI/canConverge fail-closed(详见上方 P2 条目)。
     - ✅ **v0.8.2 codex-round.mjs 加固**:CR-CLOCK-MONOTONIC(hrtime 单调计时,wall 非负)、CR-UNAVAILABLE(ENOENT/127+command-not-found/stderr-auth 即时判 + stdout 错误事件后置判,去裸 127 误判)、CR-THREAD-ATTEMPT(thread_id 仅取成功尝试)、CR-OUT-OWNERSHIP(--out 不可删/不可读/目录型不崩溃、不读陈旧产物、main 顶层兜底一行 JSON)、CR-RETRY-DIAG(spawn_error 诊断)。

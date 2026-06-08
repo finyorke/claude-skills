@@ -1,0 +1,20 @@
+{
+  "_doc": "P3 真盲评扩样(第二批):用已验证的双 agent 盲评流程,补两类缺口——非代码任务(T4 提案评审)与 UNRESOLVED 样本(T5 决策提案,budget=2)。effective 由独立子 agent 盲评(数据见 p3-blind-rescore.json 的方法)。",
+  "_method": "我(Claude)驱动 Codex 互审循环;独立子 agent 对去标识打乱的 issue 盲评 effective/noise。budget 不同 → 分快照比较(experiment.mjs 强制同预算)。",
+  "snapshot_budget6_4tasks": {
+    "_note": "T1-T3(代码)+ T4(非代码提案),均 budget 6、均收敛。采用公平性校正盲评口径(跨臂撞车的真 bug 算 effective,仅 on-merit 真噪音[无触发/排序nit/intra重叠]计 noise)。",
+    "A": { "tasks": 4, "effective_issues": 15, "noise": 1, "noise_rate": 0.0625, "rounds": 8, "total_wall_clock_ms": 829336, "unconverged_rate": 0 },
+    "B": { "tasks": 4, "effective_issues": 26, "noise": 3, "noise_rate": 0.103, "rounds": 9, "total_wall_clock_ms": 1197041, "unconverged_rate": 0 },
+    "decide": "keep_A(B 绝对噪音增多 2;噪音率升高 4.1pp)",
+    "per_task_blind": {
+      "T4_noncode_proposal": "盲评 21 条 → 15 effective / 6 noise;6 个 noise 全是跨臂撞车的真实空白(非真噪音)。公平口径:A 8 effective/0 噪音、B 13 effective/0 噪音。非代码提案上 B 几乎无真噪音且多挖真实设计空白(聚合/冲突裁决/状态并轨/收敛语义等)。"
+    }
+  },
+  "snapshot_budget2_unresolved": {
+    "_note": "T5 = 决策提案(给插件加 --auto-adopt,与核心'无隐式确认'安全原则真实冲突),budget=2。诚实驱动(采纳核心 blocker + 真实保留'独立桶变体值得做'的分歧)。",
+    "T5_A": { "converged": false, "reason": "到顶 cap=2 未收敛(UNRESOLVED)", "rounds": 2, "issues_raised": 9, "wall_clock_ms": 72583 },
+    "T5_B": { "converged": false, "reason": "到顶 cap=2 未收敛(UNRESOLVED)", "rounds": 2, "issues_raised": 13, "wall_clock_ms": 90904 },
+    "finding": "两臂在紧预算(2 轮)下都 UNRESOLVED(unconverged_rate=1.0 both)→ 遗漏检查不改变收敛性,它增加的是'发现'不是'收敛速度'。n=1,decide 对该快照按样本不足 inconclusive(仅作结构演示 + UNRESOLVED 样本)。"
+  },
+  "conclusion": "扩样后 keep_A 仍成立(4 任务、含非代码、盲评)。但画面更细:① B 一致地【更高召回】——4 任务共 26 vs 15 有效 issue(多 73%),含 A 漏掉的 T3 merge blocker、T4 提案的聚合/冲突/状态/收敛等真实空白;② 代价是少量真噪音(代码任务上的无触发/排序 nit)+ 更多轮/墙钟;③ keep_A 由插件【精度优先/零噪音容忍】的绝对噪音闸门驱动,并非'B 无价值'——这是召回/精度权衡。④ 任务类型重要:**非代码提案评审上 omission-check 几乎无真噪音、价值明显更高**(设计文档的'空白'正是遗漏检查的靶心);代码评审上才出现噪音。⑤ 紧预算下两臂都 UNRESOLVED,遗漏检查无助收敛。建议:omission-check 不宜代码评审默认开,但**值得作为'提案/设计文档评审'或'要高召回深挖'场景的推荐开关**。样本仍小(代码 3 + 非代码 1 + UNRESOLVED 1),按此打折。"
+}
