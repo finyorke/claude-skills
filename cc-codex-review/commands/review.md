@@ -1,6 +1,6 @@
 ---
 description: Claude 与 Codex 围绕某项工作循环互审,收敛于双方 AGREE,否则到顶/停滞产出 UNRESOLVED 裁决
-argument-hint: '[--repo <dir>] [--diff <file|->] [--plan <file>] [--model <m>] [--max-rounds <n>] [--dry-run] <评审指令>'
+argument-hint: '[--repo <dir>] [--diff <file|->] [--plan <file>] [--model <m>] [--max-rounds <n>] [--omission-check] [--dry-run] <评审指令>'
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
@@ -26,6 +26,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 - `--plan <file>`:任务目标/规格文件。
 - `--model <m>`:传给 Codex 的模型。
 - `--max-rounds <n>`:硬上限轮数;`--max-rounds 0` 显式表示**不设上限**(仅靠停滞检测 + 人工兜底)。
+- `--omission-check`:**P3 实验组(arm B)开关**,默认关(关=arm A,现行行为不变)。开则**仅在第 1 轮**给 Codex 追加一次「遗漏检查」指令(见 §4.5),用于"前置新问题发现能否减少轮数而不牺牲质量"的 A/B 对照(见 DESIGN §12 / `scripts/experiment.mjs`)。
 - `--dry-run`:只组装并打印「评审包」+ 将要执行的命令,**不真正调用 Codex**,然后停止。
 
 硬上限优先级:`--max-rounds` flag > 评审指令自然语言里出现的轮数("最多 5 轮"等) > **内置默认上限 `5`**。
@@ -76,10 +77,22 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ```
 材料过大时你(Claude)可摘要,但必须在包里**显式标注截断了什么**,并据实让 Codex 在 verdict 里置 `truncated`/`reviewed_scope`。
 
+## 4.5 首轮遗漏检查(仅 `--omission-check`,P3 实验组 arm B)
+**仅当**给了 `--omission-check`、**且为第 1 轮**:在「你的职责」末尾追加**一条**指令(其余轮不追加、不带 flag 时整段跳过):
+```
+## 额外:首轮遗漏检查(本轮一次性)
+在常规复核之外,对照「任务目标」与「待审材料/代码上下文」做一次**遗漏检查**:列出当前主张或材料中
+**应被覆盖却缺失/未触及**的点(如未处理的输入域、未声明的前置条件、目标里要求却没落实的项)。
+**硬约束**:① 只基于**当前已在场的证据与目标**判断遗漏,**不要预判投机性的二阶/连锁问题**;
+② **不要输出任何 completeness 自评分或百分比**;③ 发现的遗漏照常并入 `remaining_issues`(各带稳定 id)。
+```
+- 设计意图:把"本该首轮就发现的遗漏"前置,验证能否减少后续轮数而**不增噪音/不降质量**。决策靠 `scripts/experiment.mjs` 的配对比较 + 质量优先规则,不靠直觉。
+- 边界:此追加**不改变**收敛判定、状态机、度量口径或 §7 输出——只影响第 1 轮喂给 Codex 的 packet 文本。
+
 ## 5. dry-run 短路
 若有 `--dry-run`:依次打印 ① **参数解析回显**;② 组装好的 packet.txt 全文;③ 下一节将执行的 `codex-round.mjs` 命令行,然后**结束**,不调用 Codex。
 - **参数解析回显**(使 §1 的解析对用户可眼检,而非只能信执行者)打印一行:
-  `解析结果:effective_max=<n|null> (来源:flag/自然语言/默认) · max-rounds-raw=<原值> · repo=<…|无> · diff=<…|无> · plan=<…|无> · model=<…|默认>`
+  `解析结果:effective_max=<n|null> (来源:flag/自然语言/默认) · max-rounds-raw=<原值> · repo=<…|无> · diff=<…|无> · plan=<…|无> · model=<…|默认> · omission-check=<on|off>`
   - `effective_max=null` 表示无上限(仅 `--max-rounds 0` 会得到);来源标明该值取自 `--max-rounds` flag、自然语言「最多 N 轮」还是内置默认 5。
   - 若参数非法(`--max-rounds` 为负/非整数、自然语言「0 轮」等,见 §1),dry-run 同样要**先打印解析错误并停止**:`解析错误:<原因>`,不组装评审包。
 
