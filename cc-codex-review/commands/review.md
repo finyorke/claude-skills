@@ -26,7 +26,13 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 - `--plan <file>`:任务目标/规格文件。
 - `--model <m>`:传给 Codex 的模型。
 - `--max-rounds <n>`:硬上限轮数;`--max-rounds 0` 显式表示**不设上限**(仅靠停滞检测 + 人工兜底)。
-- `--omission-check`:**P3 实验组(arm B)开关**,默认关(关=arm A,现行行为不变)。开则**仅在第 1 轮**给 Codex 追加一次「遗漏检查」指令(见 §4.5),用于"前置新问题发现能否减少轮数而不牺牲质量"的 A/B 对照(见 DESIGN §12 / `scripts/experiment.mjs`)。
+- `--omission-check`:开启后**仅在第 1 轮**给 Codex 追加一次「遗漏检查」指令(见 §4.5),让其前置列出"应覆盖却缺失/未触及"的点。默认关。
+  - **用法建议(基于 P3 实验,见 DESIGN §12;小样本启发式,非定论)**:它是个**召回↑ / 精度↓的权衡开关**——
+    · ✅ 推荐用于**提案 / 设计文档 / 计划评审**(空白多、几乎不增噪音,实测多挖大量真实遗漏);
+    · ✅ 推荐用于**需高召回的深挖 / 高风险签核**(宁可多查也别漏,愿容忍少量噪音);
+    · ⛔ **代码评审默认关**(实测会引入少量噪音如"无触发的理论问题",质量优先下不划算);
+    · ⚠️ **别指望它省轮或加速收敛**——它增加的是"发现"而非"收敛速度",紧预算下两臂都更可能 UNRESOLVED。
+  - 实验对照工具:`scripts/experiment.mjs`(A=关 / B=开 的配对比较 + 质量优先 decide)。
 - `--dry-run`:只组装并打印「评审包」+ 将要执行的命令,**不真正调用 Codex**,然后停止。
 
 硬上限优先级:`--max-rounds` flag > 评审指令自然语言里出现的轮数("最多 5 轮"等) > **内置默认上限 `5`**。
@@ -77,7 +83,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ```
 材料过大时你(Claude)可摘要,但必须在包里**显式标注截断了什么**,并据实让 Codex 在 verdict 里置 `truncated`/`reviewed_scope`。
 
-## 4.5 首轮遗漏检查(仅 `--omission-check`,P3 实验组 arm B)
+## 4.5 首轮遗漏检查(仅 `--omission-check`;用法判据见 §1)
 **仅当**给了 `--omission-check`、**且为第 1 轮**:在「你的职责」末尾追加**一条**指令(其余轮不追加、不带 flag 时整段跳过):
 ```
 ## 额外:首轮遗漏检查(本轮一次性)
