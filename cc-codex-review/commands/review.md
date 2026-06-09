@@ -1,6 +1,6 @@
 ---
 description: Claude 与 Codex 围绕某项工作循环互审,收敛于双方 AGREE,否则到顶/停滞产出 UNRESOLVED 裁决
-argument-hint: '[--repo <dir>] [--diff <file|->] [--plan <file>] [--model <m>] [--max-rounds <n>] [--omission-check] [--dry-run] <评审指令>'
+argument-hint: '[--repo <dir>] [--diff <file|->] [--plan <file>] [--model <m>] [--max-rounds <n>] [--lens <name>] [--dry-run] <评审指令>'
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
@@ -26,13 +26,17 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 - `--plan <file>`:任务目标/规格文件。
 - `--model <m>`:传给 Codex 的模型。
 - `--max-rounds <n>`:硬上限轮数;`--max-rounds 0` 显式表示**不设上限**(仅靠停滞检测 + 人工兜底)。
-- `--omission-check`:开启后**仅在第 1 轮**给 Codex 追加一次「遗漏检查」指令(见 §4.5),让其前置列出"应覆盖却缺失/未触及"的点。默认关。
-  - **用法建议(基于 P3 实验,见 DESIGN §12;小样本启发式,非定论)**:它是个**召回↑ / 精度↓的权衡开关**——
-    · ✅ 推荐用于**提案 / 设计文档 / 计划评审**(空白多、几乎不增噪音,实测多挖大量真实遗漏);
-    · ✅ 推荐用于**需高召回的深挖 / 高风险签核**(宁可多查也别漏,愿容忍少量噪音);
-    · ⛔ **代码评审默认关**(实测会引入少量噪音如"无触发的理论问题",质量优先下不划算);
-    · ⚠️ **别指望它省轮或加速收敛**——它增加的是"发现"而非"收敛速度",紧预算下两臂都更可能 UNRESOLVED。
-  - 实验对照工具:`scripts/experiment.mjs`(A=关 / B=开 的配对比较 + 质量优先 decide)。
+- `--lens <name>`:给本次评审套一个**焦点镜头**(默认无 = 通用评审)。**独立、单次、单镜头的 opt-in 功能,不是"P4 v1"、也不是综合签核**;复用全部现有协议(不改收敛/状态机/度量)。预设:
+  · `omission` — 第 1 轮一次性"遗漏检查"(见 §4.5)。**已由 P3 实验验证**。
+  · `security` / `correctness` / `requirements` — 每轮持续的专项焦点(见 §4.5)。**实验性、未经 P3 验证**(`correctness` 与默认代码 rubric、`requirements` 与「需求/计划门禁」模式有重叠);其增量价值/噪音/生命周期尚未实测,用前知此。
+  - **归一化(解析阶段)**:`--omission-check` ≡ `--lens omission`(向后兼容别名)。归一为单一 `effective_lens`;若 `--lens` 与 `--omission-check` **同时出现且不一致** / 重复 `--lens` / `--lens` 缺 name / 未知 name → **报参数错误**。dry-run(§5)回显 `effective_lens`。
+  - **与材料模式叠加(§「适用模式与边界」优先)**:镜头只在**该材料类型允许的 rubric 内**重排优先级,**不得越界**——对纯文字/提案材料用 `security`/`correctness` 时**剔除代码专属项**(并发/竞态/反序列化/文件进程操作等),只保留对该材料成立的部分;若镜头与材料**完全**不匹配 → **报参数错误**(单一规则,不静默退化为通用评审)。
+  - **签核 provenance + AGREE 语义(LENS-SCOPE)**:镜头是"**通用评审 + 额外侧重**",**不缩小签核范围**——双 AGREE 仍是**全面签核**。`effective_lens` 非空时,§7 输出**必须顶部标注 `镜头:<effective_lens>(额外侧重此视角;AGREE 仍为全面签核)`**(记录所用镜头便于审计/实验比较)。
+  - **用法建议(P4 scope-down;基于 P3 实验,**仅 `omission` 经验证**;小样本启发式,非定论)**:镜头是**召回↑ / 精度↓的权衡**——
+    · ✅ `omission` 推荐用于**提案 / 设计文档 / 计划评审**(空白多、几乎不增噪音,实测多挖真实遗漏);
+    · ⛔ **代码评审默认不套镜头**(omission 镜头在代码上实测会引入少量噪音);需要某专项深度时再点对应镜头(如审安全敏感代码用 `--lens security`,但它仍是实验性、价值未实测)。
+    · ⚠️ **成本**:无强制 fan-out、单次调用沿用原预算;但单镜头本身可能比无镜头**略增轮/墙钟**(omission 实测 +52% 墙钟、+1 轮),且**别指望省轮或加速收敛**(它增加"发现"而非"收敛速度")。多镜头 = 多次独立调用,成本近似按次数增长,**各次结论不可组合**(无跨调用去重/冲突裁决/综合 AGREE——那是暂缓的 full-P4)。
+  - 实验对照工具:`scripts/experiment.mjs`(无镜头 vs `omission` 镜头 的配对比较 + 质量优先 decide;仅 omission 有数据,其余镜头待实验)。run 记录可带 `lens` 字段以区分不同镜头的数据(LENS-PROVENANCE)。
 - `--dry-run`:只组装并打印「评审包」+ 将要执行的命令,**不真正调用 Codex**,然后停止。
 
 硬上限优先级:`--max-rounds` flag > 评审指令自然语言里出现的轮数("最多 5 轮"等) > **内置默认上限 `5`**。
@@ -83,22 +87,35 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ```
 材料过大时你(Claude)可摘要,但必须在包里**显式标注截断了什么**,并据实让 Codex 在 verdict 里置 `truncated`/`reviewed_scope`。
 
-## 4.5 首轮遗漏检查(仅 `--omission-check`;用法判据见 §1)
-**仅当**给了 `--omission-check`、**且为第 1 轮**:在「你的职责」末尾追加**一条**指令(其余轮不追加、不带 flag 时整段跳过):
-```
-## 额外:首轮遗漏检查(本轮一次性)
-在常规复核之外,对照「任务目标」与「待审材料/代码上下文」做一次**遗漏检查**:列出当前主张或材料中
-**应被覆盖却缺失/未触及**的点(如未处理的输入域、未声明的前置条件、目标里要求却没落实的项)。
-**硬约束**:① 只基于**当前已在场的证据与目标**判断遗漏,**不要预判投机性的二阶/连锁问题**;
-② **不要输出任何 completeness 自评分或百分比**;③ 发现的遗漏照常并入 `remaining_issues`(各带稳定 id)。
-```
-- 设计意图:把"本该首轮就发现的遗漏"前置,验证能否减少后续轮数而**不增噪音/不降质量**。决策靠 `scripts/experiment.mjs` 的配对比较 + 质量优先规则,不靠直觉。
-- 边界:此追加**不改变**收敛判定、状态机、度量口径或 §7 输出——只影响第 1 轮喂给 Codex 的 packet 文本。
+## 4.5 镜头注入(仅 `--lens <name>`;预设与用法判据见 §1)
+**仅当 `effective_lens` 非空**(§1 归一化得出,含 `--omission-check` 别名 → `omission`):把该镜头的焦点指令注入「你的职责」。**为空则整段跳过**(通用评审)。镜头只**重排 Codex 的关注优先级**,**不改**收敛判定/状态机/度量口径/§7 输出——只影响喂给 Codex 的 packet 文本。**单次单镜头**(多镜头分多次调用)。注入按 `effective_lens` 分支(不直接看 flag 写法):
+- `effective_lens=omission`(**仅第 1 轮、一次性**;其余轮不追加):
+  ```
+  ## 额外:首轮遗漏检查(本轮一次性)
+  在常规复核之外,对照「任务目标」与「待审材料/代码上下文」做一次**遗漏检查**:列出当前主张或材料中
+  **应被覆盖却缺失/未触及**的点(如未处理的输入域、未声明的前置条件、目标里要求却没落实的项)。
+  **硬约束**:① 只基于**当前已在场的证据与目标**判断遗漏,**不要预判投机性的二阶/连锁问题**;
+  ② **不要输出任何 completeness 自评分或百分比**;③ 发现的遗漏照常并入 `remaining_issues`(各带稳定 id)。
+  ```
+- `effective_lens ∈ {security, correctness, requirements}`(**每轮持续**,作为该轮复核的优先焦点,追加到「你的职责」末尾):
+  ```
+  ## 焦点镜头:<lens>
+  本次评审请**优先**从「<lens>」视角审查,但**不得降低其它 rubric 的覆盖标准**(仍执行完整通用评审,只是额外侧重该视角;故 AGREE 仍是全面签核):
+  · security:攻击面、输入信任与校验、鉴权/越权、机密泄露、注入/反序列化、不安全的文件/进程/网络操作。
+  · correctness:逻辑正确性、边界/极端用例、错误与异常处理、并发/竞态、状态不变量。
+  · requirements:是否覆盖「任务目标」/规格、缺失或不可验证的需求、未声明的依赖与前置。
+  (只注入所选 lens 对应的那一条。)仍按 JSON Schema 输出全部字段;发现并入 `remaining_issues`(各带稳定 id)。
+  ```
+- **生命周期(LENS-LIFECYCLE)**:`omission` 仅第 1 轮一次;持续型镜头(security/correctness/requirements)须在**每轮增量(§6)里也重述「## 焦点镜头」头**,不能只依赖 resume 上下文带过。
+- **材料模式过滤(LENS-MODE)**:注入前按 §「适用模式与边界」剔除与材料类型不符的项(如对提案材料剔除 security/correctness 里的并发/反序列化/文件进程等代码专属项);材料**完全**不匹配 → **报参数错误**(单一规则,不静默退化)。
+- **AGREE 语义(LENS-SCOPE)**:镜头是"**通用评审 + 额外侧重**"——`不排除其它显见问题`,故双 AGREE 仍是**全面签核**(只是对该视角更用力),**不**缩小为"仅该视角通过"。§7 的镜头标注只是记录所用焦点,非降级签核范围。
+- 设计意图(P4 scope-down,见 DESIGN §12):镜头 = 可选 rubric 焦点。**仅 `omission` 经 P3 验证**(换 rubric → 发现不同真问题,omission 镜头曾挖出默认视角漏掉的 blocker);security/correctness/requirements 为**由此外推的实验性预设、尚未实测**。并行多 lens + 聚合引擎(原 P4 愿景)因 4x 成本 + 聚合/冲突/状态/收敛未定义 + 价值未证而**继续暂缓**。
 
 ## 5. dry-run 短路
 若有 `--dry-run`:依次打印 ① **参数解析回显**;② 组装好的 packet.txt 全文;③ 下一节将执行的 `codex-round.mjs` 命令行,然后**结束**,不调用 Codex。
 - **参数解析回显**(使 §1 的解析对用户可眼检,而非只能信执行者)打印一行:
-  `解析结果:effective_max=<n|null> (来源:flag/自然语言/默认) · max-rounds-raw=<原值> · repo=<…|无> · diff=<…|无> · plan=<…|无> · model=<…|默认> · omission-check=<on|off>`
+  `解析结果:effective_max=<n|null> (来源:flag/自然语言/默认) · max-rounds-raw=<原值> · repo=<…|无> · diff=<…|无> · plan=<…|无> · model=<…|默认> · effective_lens=<name|无>`
+  - 归一化(§1)后回显 `effective_lens`(`--omission-check` 归一为 `omission`)。若 `--lens` 未知 name / `--lens`+`--omission-check` 冲突 / 镜头与材料完全不匹配 → dry-run **先打印解析错误并停止**:`解析错误:<原因>`。
   - `effective_max=null` 表示无上限(仅 `--max-rounds 0` 会得到);来源标明该值取自 `--max-rounds` flag、自然语言「最多 N 轮」还是内置默认 5。
   - 若参数非法(`--max-rounds` 为负/非整数、自然语言「0 轮」等,见 §1),dry-run 同样要**先打印解析错误并停止**:`解析错误:<原因>`,不组装评审包。
 
@@ -118,7 +135,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   - `render-unresolved`(`{state, meta}`):出四段块。
   - state 只在本次循环内传递、不持久化(守 §1);语义决策与分歧标注(annotations)仍由你(Claude)给,脚本不自行判断(守 §2)。
   - **每次 CLI 调用都须显式传 state(防漏传清空历史→假收敛,RS-P2-013-R1)**:`reduce`/`validate-round` 必须带 `prevState.points`(**第 1 轮显式传 `{"round":0,"points":[]}`**,不可省略);`converge` 必须带 `state.points` 且 `claudeAgree` 为严格布尔。脚本对缺省/坏输入返回 `{ok:false,error:...}` 而非默认放行。
-- **每轮记 P1 度量(`${CLAUDE_PLUGIN_ROOT}/scripts/metrics.mjs`)**:reduce 之后调 `round-metrics`(传 `prevState` + 本轮 `round`〔含你给的语义标签 `revision_induced`/`stuck`〕+ codex-round 输出的 `wall_clock_ms` 与 `attempts`)得本轮记录;循环结束 `aggregate` 汇总(含 `retried_rounds`=发生过重试的轮数)。**汇总时传 `expectedRounds`=本次循环已开始(`round++` 到达)的轮数**:若某轮因 `bad_verdict`/`codex_unavailable` 中断而没产出度量记录,`records.length < expectedRounds` → `complete:false` 且 `total_wall_clock_ms`/`retried_rounds` 归 null,**不拿残缺记录伪装完整成本**(修 MET-ERR-001)。`new/repeat` 由 id 是否在 prevState 出现**确定性判定**;`revision_induced`(⊆new:因上轮修订才出现)/`stuck`(⊆repeat:连续≥2 轮实质未变)由你据实标注。用于"轮次耗在新发现 vs 确认 vs 反复"的数据化复盘(跨 ≥3 个真实任务用 `aggregate-tasks`,各任务 `expectedRounds` 对齐传入)。
+- **每轮记 P1 度量(`${CLAUDE_PLUGIN_ROOT}/scripts/metrics.mjs`)**:reduce 之后调 `round-metrics`(传 `prevState` + 本轮 `round`〔含你给的语义标签 `revision_induced`/`stuck`〕+ codex-round 输出的 `wall_clock_ms` 与 `attempts`)得本轮记录;循环结束 `aggregate` 汇总(含 `retried_rounds`=发生过重试的轮数)。**汇总时传 `expectedRounds`=本次循环已开始(`round++` 到达)的轮数**:若某轮因 `bad_verdict`/`codex_unavailable` 中断而没产出度量记录,`records.length < expectedRounds` → `complete:false` 且 `total_wall_clock_ms`/`retried_rounds` 归 null,**不拿残缺记录伪装完整成本**(修 MET-ERR-001)。`new/repeat` 由 id 是否在 prevState 出现**确定性判定**;`revision_induced`(⊆new:因上轮修订才出现)/`stuck`(⊆repeat:连续≥2 轮实质未变)由你据实标注。用于"轮次耗在新发现 vs 确认 vs 反复"的数据化复盘(跨 ≥3 个真实任务用 `aggregate-tasks`,各任务 `expectedRounds` 对齐传入)。**若套了镜头**,在 experiment run 记录里带 `lens=<effective_lens>`(LENS-PROVENANCE),使不同镜头的数据可区分、可同镜头比较。
 
 每轮:
 1. `round++`。
@@ -130,7 +147,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
      [--repo <dir>] [--model <m>] [--resume <thread_id>] \
      < <packet 或增量文件>
    ```
-   - 第 1 轮 stdin 喂完整 packet.txt;第 2 轮起只喂**增量**,增量须含三部分:① 你对上轮每条 issue 的逐条回应;② 修订后的「Claude 当前主张」;③ **所有仍未确认的 `candidate`(带稳定 id)+ 逐条请 Codex 确认/拒绝** —— candidate 持续随每轮增量携带,直到被明确确认、拒绝或撤销。
+   - 第 1 轮 stdin 喂完整 packet.txt;第 2 轮起只喂**增量**,增量须含:① 你对上轮每条 issue 的逐条回应;② 修订后的「Claude 当前主张」;③ **所有仍未确认的 `candidate`(带稳定 id)+ 逐条请 Codex 确认/拒绝** —— candidate 持续随每轮增量携带,直到被明确确认、拒绝或撤销;④ **若 `effective_lens` 是持续型镜头(security/correctness/requirements),重述 §4.5 的「## 焦点镜头」头**(不能只靠 resume 带过,LENS-LIFECYCLE)。
 3. 解析脚本 stdout 的那行 JSON:
    - `error=codex_unavailable` → 告诉用户运行 `/codex:setup`,**停止**。
    - `error=bad_verdict` → 已重试仍失败;把 `raw_message` + `codex_exit` + `stdout_tail`/`stderr_tail`(含 codex 的 error/turn.failed 事件)给用户帮助排查,**停止**。
@@ -157,9 +174,11 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   <后续行动的具体建议>
   ```
   若最后一轮 `truncated=true`,**必须**在结论顶部加一行 `⚠️ 基于截断材料(reviewed_scope: ...),非完整签核`,避免被误读为全量通过。
+  **若 `effective_lens` 非空,必须**在结论顶部加一行 `镜头:<effective_lens>(本次额外侧重此视角;AGREE 仍为全面签核)`(LENS-PROVENANCE/LENS-SCOPE:镜头是"通用评审 + 额外侧重",不缩小签核范围;标注便于审计与实验比较)。
 - 未收敛(硬上限 / 停滞 / 用户打断):打印**结构化 UNRESOLVED 块**,供用户裁决。**必须既展示已达成的共识、也逐条标注未决分歧的类型与影响**,让用户能区分"地基已牢、只差几处"还是"全程在吵",并判断每条卡点要不要现在管:
   ```
   ⚠️ 未收敛(状态:UNRESOLVED · 原因:<到达 max-rounds / 停滞 / 用户打断>)
+  <若 effective_lens 非空:加一行 `镜头:<effective_lens>(本次额外侧重此视角;不缩小签核范围)`>
   评审范围:<最后一轮 reviewed_scope>  ·  关键假设:<assumptions 摘要>
   <若最后一轮 truncated=true,加一行:⚠️ 基于截断材料,下列「已达成一致」均为非完整签核,人工裁决时须复核范围>
 

@@ -59,7 +59,7 @@
 
 ```
 /cc-codex-review[:review] [--repo <dir>] [--diff <file|->] [--plan <file>] \
-                          [--model <m>] [--max-rounds <n>] <评审指令>
+                          [--model <m>] [--max-rounds <n>] [--lens <name>] <评审指令>
 ```
 
 - 全部 flag 可选。**位置参数 = 评审指令**(例:"看一下这份计划,有什么意见,能不能进入下一步")。
@@ -69,6 +69,7 @@
 - `--plan <file>`:任务目标 / 规格文件路径;不给则用对话里的目标,或 Claude 问用户一次。
 - `--model <m>`:传给 `codex -m`;不给用 codex 默认。
 - `--max-rounds <n>`:硬上限轮数(精确控制);`--max-rounds 0` 显式表示不设上限。
+- `--lens <name>`(P4 scope-down,见 §12):可选焦点镜头,单次单镜头、opt-in、复用全部现有协议。`omission`(已验证)/ `security`/`correctness`/`requirements`(实验性)。`--omission-check` 为 `--lens omission` 别名。镜头=通用评审+额外侧重,AGREE 仍是全面签核。
 
 ### 硬上限优先级
 
@@ -268,6 +269,7 @@ LLM 循环难做单元测试,采用:
 - **max-rounds 解析**(均可用 `--dry-run` 眼检:它会回显 `effective_max` 及其来源,见 `commands/review.md` §5):① 不带 flag/不提轮数 → 默认 `effective_max=5`;② `--max-rounds 3` → 3;③ 指令含"最多 6 轮"无 flag → 6;④ flag 与自然语言并存 → flag 优先;⑤ `--max-rounds 0` → 无上限(仅靠停滞 + 人工);⑥ 非法值(负数 / 非整数 / 自然语言"0 轮")→ 报参数错误并停,**不**静默回退默认。
 - **candidate 生命周期**:⑦ Claude 采纳修订(adopted)**或带理由反驳(rebutted)**→ 进 `candidate`,**不**进 `agreed`;⑧ 下一轮 Codex 在 `candidate_dispositions` 对该 id 给 `confirmed` → 晋升 `agreed`(反驳被 confirmed=Codex 接受反驳,该点了结);⑨ issue 仅"这轮没出现"而无 confirmed → **不**晋升;⑩ 已晋升 `agreed` 点被重新质疑 → 退回 `❌`(非退回 candidate);⑩b 晋升只认逐条 `confirmed`,`verdict=AGREE` 不隐式确认;收敛要求 candidate 与 open 均空。
 - **UNRESOLVED 输出**:⑪ 四段齐全(✅/🔶/❌/📋),`candidate` 落在 🔶 而非 ✅;⑫ 顶部含 reviewed_scope + assumptions;⑬ 最后一轮 truncated → 加非完整签核警告;⑭ 每条卡点同时有「状态」与「影响严重度」两维;⑮ 最后一轮刚采纳的修订 → 落 🔶「待复核确认」,不混入 ✅,也不重复进 ❌。
+- **`--lens` 镜头(§1/§4.5)**:⑯ 无 `--lens` → 通用评审,不注入镜头、§7 不标注;⑰ `--lens omission` 与 `--omission-check` 行为完全等价(归一为 `effective_lens=omission`),dry-run 回显 `effective_lens`;⑱ 未知 name / `--lens`+`--omission-check` 冲突 / `--lens` 缺 name → 报参数错误;⑲ 持续型镜头(security/correctness/requirements)每轮增量重述「## 焦点镜头」头(非仅靠 resume);⑳ 对纯文字/提案材料套 security/correctness → 剔除代码专属项,完全不匹配 → 报错;㉑ `effective_lens` 非空时 §7 输出顶部标注 `镜头:<lens>(额外侧重,非缩小签核)`,且 AGREE 仍为全面签核。
 
 ## 11. 开放点与实测结论(codex-cli 0.135.0)
 
@@ -286,7 +288,7 @@ LLM 循环难做单元测试,采用:
 
 ## 12. 效果提升路线图(经 Claude×Codex 互审收敛)
 
-> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0/v0.5.1/v0.6.0);P1 🟡 instrumentation 已实现(v0.7.0)、真机数据采集待做;P3 ✅ 脚手架(v0.8.0)+ A/B 实验(盲评,budget-6 共 4 任务含非代码 + budget-2 UNRESOLVED 样本):omission-check 高召回但精度优先 decide=keep_A,代码评审不宜默认开、但推荐用于提案/设计文档评审;P4 未做(暂缓)**。优先级与语义经对抗式互审锁定。
+> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0/v0.5.1/v0.6.0);P1 🟡 instrumentation 已实现(v0.7.0)、真机数据采集待做;P3 ✅ 脚手架(v0.8.0)+ A/B 实验(盲评,budget-6 共 4 任务含非代码 + budget-2 UNRESOLVED 样本):omission-check 高召回但精度优先 decide=keep_A,代码评审不宜默认开、但推荐用于提案/设计文档评审;P4 决策门 → scope-down:`--lens <name>` 单镜头功能已落地(实验性,仅 omission 验证),并行聚合版 full-P4 继续暂缓**。优先级与语义经对抗式互审锁定。
 
 - **P0 结构化协议(P2 的前置)— ✅ 已实现(v0.4.0)**:`verdict.schema.json` 已加 `remaining_issues[].id`(稳定 point_id)+ `candidate_dispositions[] = {id, disposition: confirmed|rejected}`(**事件**,非状态,首轮空数组);`codex-round.mjs` 已透传这两个字段(冒烟曾发现并修复其被 cherry-pick 丢弃;并收紧:缺 required 数组字段 → `bad_verdict` 不静默默认);`review.md` 已指示 Codex 产出 id/dispositions 并据此晋升;`rejected` 的点用同一 id 留在 remaining_issues。真机两轮 dogfood 验证 confirmed/rejected + id 跨轮稳定。
   - `state ∈ {open, candidate, agreed, merged}`(持久)、合并血缘 `merged_from/merged_into`、覆盖/未知ID/状态机不变量校验属 **Claude 侧账本**,由 P2 `review-state.mjs` 维护,**不进 Codex 输出 schema**(Codex 不拥有状态)。
@@ -308,6 +310,10 @@ LLM 循环难做单元测试,采用:
     - ✅ **v0.8.2 codex-round.mjs 加固**:CR-CLOCK-MONOTONIC(hrtime 单调计时,wall 非负)、CR-UNAVAILABLE(ENOENT/127+command-not-found/stderr-auth 即时判 + stdout 错误事件后置判,去裸 127 误判)、CR-THREAD-ATTEMPT(thread_id 仅取成功尝试)、CR-OUT-OWNERSHIP(--out 不可删/不可读/目录型不崩溃、不读陈旧产物、main 顶层兜底一行 JSON)、CR-RETRY-DIAG(spawn_error 诊断)。
     - ✅ **v0.8.3 review-state 余项 + metrics 加固**(Codex 互审 3 轮收敛):review-state——RS-P2-011 validateRound 事件**形状契约**(数组/元素形状 + remaining_issues 的 title/detail/severity 类型,severity 用 `Object.hasOwn` 防原型绕过;adopted/rebutted/annotations 元数据约束为 string,既消除别名又杜绝不可克隆值)、RS-P2-012 validateState 缺 id/活跃点孤儿 merged_into/非对象点 fail-closed、RS-P2-014 meta 深拷贝(structuredClone)、RS-P2-015 链式 merge 前置拒、RS-P2-016 空串覆盖、RS-P2-017 render 措辞;metrics——MTR-NUM 数值域(有限非负 wall/整数≥1 attempts)、MTR-ID id 集合语义去重、MET-TASK 空任务 avg→null。全套 118 绿。
     - ✅ **v0.8.4 MET-ERR-001**(Codex 互审 2 轮收敛):aggregate/aggregateTasks 加 `expectedRounds`(已开始轮数)+ `complete` 标志,**fail-closed**——某轮 bad_verdict/unavailable 中断致 `records.length < expectedRounds`、或非法/不一致 expectedRounds(非非负整数、records≠expected、跨任务数组非等长)→ `complete:false` 且 `total_wall_clock_ms`/`retried_rounds` 归 null,不拿残缺记录伪装完整成本;review.md §6 指示汇总时传入已开始轮数。**至此 P3 实验真审发现的 bug 全部修复(v0.8.1~v0.8.4)。**
-- **P4 多视角复核**:**暂缓**——聚合/去重/冲突裁决/每镜头 candidate 状态/成本上限/收敛语义未定义,且与 §1 YAGNI 有张力。
+- **P4 多视角复核 — 决策门 → scope-down(v0.8.6,Codex 互审收敛)**:
+  - **决策门结论**:原"并行 N lens + 聚合引擎"愿景**继续暂缓**——T4 提案评审暴露 13 条空白(聚合/去重/冲突裁决/每镜头 candidate 状态/收敛语义/成本 4x 上限/兼容…),且 P3 数据未证其价值、`独立 thread ≠ 独立视角`(同模型同 packet 结果相关)。这些 13 条 checklist 留作 full-P4 未来 spec。
+  - **改做最小可行形态 `--lens <name>`**:把 `--omission-check` 泛化为可选**单镜头**(omission/security/correctness/requirements),**单次、opt-in、复用全部现有协议**——一次只有一个镜头、产出并入同一 `remaining_issues`,故根上不出现聚合/跨lens状态/收敛重定义(避开全部 4 个 blocker)。镜头 = "通用评审 + 额外侧重",**AGREE 仍是全面签核**(LENS-SCOPE)。
+  - **证据边界**:**仅 `omission` 经 P3 验证**;security/correctness/requirements 为外推的**实验性**预设、未实测(且与默认 rubric 有重叠)。多镜头 = 多次独立调用,**结论不可组合**(那才是 full-P4)。
+  - **协议要点(经 dogfood 闭合)**:effective_lens 归一(`--omission-check`≡`--lens omission`,冲突/未知/缺名报错)、镜头按材料模式过滤越界项(完全不匹配→报错)、持续镜头每轮增量重述、§7 输出标注镜头(provenance)、experiment run 带 `lens` 字段、成本表述去掉"1x"(无强制 fan-out、单镜头仍可能略增轮/墙钟)。
 
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。

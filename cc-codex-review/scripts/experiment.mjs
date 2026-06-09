@@ -17,6 +17,7 @@
 //     issues: [{ id:'I1', effective:true }, ...], // 本次共提的 issue + rubric 判定
 //     effective_basis: 'blind' | 'rubric', // issues 非空时必填:effective 的判定来源(审计用)
 //     unnecessary_revisions: 0, // 反向质量指标:事后 rubric 认为本不必要的修订数
+//     lens: 'omission' | 'security' | ... ,// 可选:本 run 所用焦点镜头(--lens;无则省略)。用于区分不同镜头的数据、便于审计与同镜头比较(LENS-PROVENANCE)。validateRuns 不强制。
 //   }
 import { pathToFileURL } from 'node:url';
 
@@ -55,6 +56,7 @@ export function validateRuns(runs = [], arm = '?') {
     });
     if (r.issues.length > 0 && r.effective_basis !== 'blind' && r.effective_basis !== 'rubric')
       errors.push(`${at}: issues 非空时 effective_basis 须为 'blind' 或 'rubric'(有效性须经终局复核,不可由"被采纳"推定)`);
+    if (r.lens != null && (typeof r.lens !== 'string' || !r.lens)) errors.push(`${at}: lens 若提供须为非空字符串(LENS-PROVENANCE)`);
   });
   return errors;
 }
@@ -104,6 +106,12 @@ export function compare(A = [], B = []) {
     errors.push(`任务未配对:A=[${tasksA.join(',')}] B=[${tasksB.join(',')}]`);
   const budgets = new Set([...aArr, ...bArr].map((r) => r && r.budget).filter((b) => b != null));
   if (budgets.size > 1) errors.push(`预算快照不统一(须同预算比较):{${[...budgets].join(',')}}`);
+  // 同臂 lens 一致性(LENS-PROVENANCE):不得把不同镜头的 run 混入同一臂当同处理聚合(如 omission 与 security 混)。
+  // 缺失 lens 记为 '∅none' 参与一致性(不过滤),否则同臂"部分无镜头 + 部分 omission"会被漏判为一致(LENS-PROVENANCE 轮4)。
+  const lensSet = (arr) => new Set(arr.filter((r) => r && typeof r === 'object').map((r) => (r.lens == null ? '∅none' : r.lens)));
+  const la = lensSet(aArr), lb = lensSet(bArr);
+  if (la.size > 1) errors.push(`arm A 混用不同 lens(同臂须同镜头):{${[...la].join(',')}}`);
+  if (lb.size > 1) errors.push(`arm B 混用不同 lens(同臂须同镜头):{${[...lb].join(',')}}`);
 
   const sa = armSummary(aArr);
   const sb = armSummary(bArr);

@@ -11,9 +11,11 @@ claude plugin install cc-codex-review@fun-plugins
 
 ## 用法
 ```
-/cc-codex-review:review [--repo <dir>] [--diff <file|->] [--plan <file>] [--model <m>] [--max-rounds <n>] [--dry-run] <评审指令>
+/cc-codex-review:review [--repo <dir>] [--diff <file|->] [--plan <file>] [--model <m>] [--max-rounds <n>] [--lens <name>] [--dry-run] <评审指令>
 ```
 把要评审的材料粘贴进当前会话,再运行命令。详见 DESIGN.md。
+
+`--lens <name>`(可选焦点镜头,opt-in、单次单镜头):`omission`(首轮遗漏检查,**已验证**,推荐用于提案/设计文档评审)、`security`/`correctness`/`requirements`(**实验性**专项焦点)。镜头是"通用评审+额外侧重",AGREE 仍是全面签核;代码评审默认不套镜头。`--omission-check` 为 `--lens omission` 别名。
 
 ## 开发
 ```

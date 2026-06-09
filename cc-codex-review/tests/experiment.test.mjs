@@ -241,3 +241,31 @@ test('decide: 质量不回退但成本互有增减 → inconclusive(诚实报告
   assert.equal(v.verdict, 'inconclusive');
   assert.match(v.reasons.join(), /互有增减/);
 });
+
+test('LENS-PROVENANCE: lens 非字符串被拒;同臂混用不同 lens → paired=false', () => {
+  // lens 类型校验
+  assert.match(validateRuns([mkRun('T1', { lens: 123 })], 'A').join(), /lens 若提供须为非空字符串/);
+  assert.equal(validateRuns([mkRun('T1', { lens: 'omission' })], 'A').length, 0);
+  // 同臂混 omission/security → paired false
+  const c = compare(
+    [mkRun('T1', { lens: 'omission' }), mkRun('T2', { lens: 'security' })],
+    [mkRun('T1', { arm: 'B', lens: 'omission' }), mkRun('T2', { arm: 'B', lens: 'security' })],
+  );
+  assert.equal(c.paired, false);
+  assert.match(c.errors.join(), /混用不同 lens/);
+  // 同臂同 lens(A 无 lens、B 全 omission)→ 一致,paired true
+  const ok = compare(
+    [mkRun('T1'), mkRun('T2'), mkRun('T3')],
+    [mkRun('T1', { arm: 'B', lens: 'omission' }), mkRun('T2', { arm: 'B', lens: 'omission' }), mkRun('T3', { arm: 'B', lens: 'omission' })],
+  );
+  assert.equal(ok.paired, true);
+});
+
+test('LENS-PROVENANCE 轮4: 同臂混"无镜头+有镜头"也判不一致(缺失记为 none)', () => {
+  const c = compare(
+    [mkRun('T1'), mkRun('T2'), mkRun('T3')], // A 全无 lens → 一致
+    [mkRun('T1', { arm: 'B', lens: 'omission' }), mkRun('T2', { arm: 'B' }), mkRun('T3', { arm: 'B', lens: 'omission' })], // B 混 omission + 无
+  );
+  assert.equal(c.paired, false);
+  assert.match(c.errors.join(), /混用不同 lens/);
+});
