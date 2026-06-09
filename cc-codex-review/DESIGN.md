@@ -143,8 +143,16 @@ codex exec \
   "<对抗复核指令>"  < packet.txt
 ```
 
-- `-s read-only`:只读沙箱 —— Codex 能读文件、跑 git,但**绝不能写**(复核专用,安全)。fresh 轮用 `-s read-only`;`codex exec resume` 不接受 `-s`。⚠️ **实测(0.135.0):resume 并不继承 fresh 的 read-only,会回落到默认可写沙箱**(CR-SEC-001,§12),故 resume 必须用 `-c sandbox_mode="read-only"` 显式重申只读 —— 否则第 2+ 轮 Codex 可写文件,违反"绝不能写"的硬不变量。
-- `--cd <repo>`:`--repo` 给定时设为工作根。**仅 fresh 轮传**;resume 不接受 `--cd`,工作目录从原 session 继承。
+- `-s read-only`:只读沙箱 —— Codex 能读文件、跑 git,但其**模型生成的命令绝不能写**(复核专用,安全;"绝不能写"的精确范围见下「只读不变量的精确范围与信任边界」)。fresh 轮用 `-s read-only`;`codex exec resume` 不接受 `-s`。⚠️ **实测(0.135.0):resume 并不继承 fresh 的 read-only,会回落到默认可写沙箱**(CR-SEC-001,§12),故 resume 必须用 `-c sandbox_mode="read-only"` 显式重申只读 —— 否则第 2+ 轮 Codex 可写文件,违反"绝不能写"的硬不变量。
+- `--cd <repo>`:`--repo` 给定时设为工作根。**仅 fresh 轮传**;resume 不接受 `--cd`,工作目录从原 session 继承(cwd 继承未单独实测;**沙箱则不继承**,见 §12 CR-SEC-001)。
+- **只读不变量的精确范围与信任边界(规范性,CR-SEC-CONFIG-SIDECHANNELS)**:本文档/本工具中所有 "Codex 只读 / 绝不能写文件" 的表述,**一律特指 Codex 模型生成的命令(shell / `apply_patch`)经沙箱治理的写操作**;下面是该不变量的**完整范围声明**,其它各处的简写均以此为准、不另作更宽的承诺。
+  - **沙箱治理范围内(强制只读,已实测)**:Codex 模型生成的 shell / `apply_patch` 写。本工具在**两轮**调用都强制三道闸:
+    1. **OS 沙箱**:fresh `-s read-only` / resume `-c sandbox_mode="read-only"`(实测写入阻断;且实测 CLI flag **覆盖**用户 config.toml 的 `sandbox_mode`,即对宿主 config 具权威性)。
+    2. **`-c approval_policy="never"`**:关掉"审批升级写路径"——read-only 下被拒的写命令若 approval 允许升级,理论上可被批准后无沙箱重试落盘;实测(0.135.0 非交互 exec)即便 `on-failure` 升级也"unavailable",但显式 `never` 使保证不依赖用户 config 默认/未来变更。
+    3. **`--ignore-rules`**:不加载用户/项目 execpolicy `.rules`。官方语义中 rule `decision="allow"` 可让命令"免提示、在沙箱外运行";作为只读复核方,绝不应让宿主 ambient `.rules` 放宽复核牢笼,故忽略全部 `.rules`,令 `-s read-only` 成为唯一权威上界。(诚实标注:默认安装无 `.rules`、实测写入本就被阻断;构造 allow-rule 复现逃逸所需的 `.rules` 格式未在本机现成可得,故**未实测逃逸本身**,改以"忽略 ambient rules"防御性关闭该问题——无论 allow 是否真能逾越 `-s`,本工具调用下该路径都不可达。)
+  - **沙箱治理范围外(显式信任边界,非本工具收紧)**:用户自有 `~/.codex/config.toml` 配置的 MCP server / hooks / apps 等"副作用工具"——它们不经命令沙箱治理。按设计视为**用户可信**(在用户本机、由用户自行配置、其安全责任归用户);本工具**有意不**用 `--ignore-user-config`(会破坏 auth 与模型默认配置);`approval_policy` 则**已显式锁为 `never`**(见上,杜绝升级写路径)。**若用户自行配置了具备写能力的 MCP/hooks/apps,该写能力不在本不变量保证内**。
+  - **不在保证内、本工具也不主张的**:Codex 的网络访问按 codex 自身默认治理(本工具不声称网络隔离);harness(本脚本)对其自身 `--out` 临时产物的写/删属设计内行为,`--out` 为可信内部参数(见 CR-SEC-OUT-PATH,非"Codex 写文件"事件)。
+  - 一句话:**对 Codex 自身命令执行的 "绝不能写" = 在上述范围内完整且两轮一致;范围外项均为已声明的信任边界,不被本不变量覆盖。**
 - `--skip-git-repo-check`:**两种轮次都传**(exec 与 exec resume 都接受)。这样非 git 的 `--repo` 目录也能跑(退化为文本评审),与 §8 一致。
 - `--output-schema` + `-o`:Codex 输出结构化 verdict,AGREE 判定可靠(不靠字符串匹配)。`-o` 写入最终消息文件,便于捕获。**每次调用前都会先删除该文件**,避免读到上一轮残留 → 假成功。
 - `-m <model>`:`--model` 给定时传入。
@@ -155,7 +163,7 @@ codex exec \
 Codex 是对抗式的,若每轮失忆重读,可能反复重提已被说服的点而**永不收敛**(尤其 `--max-rounds 0` 放开上限时)。故循环内让 Codex 保持立场记忆:
 
 - **第 1 轮**:fresh `codex exec --json ...`,发送完整评审包。从 stdout **第一行** `{"type":"thread.started","thread_id":"<UUID>"}` 解析并保存 `thread_id`(不可用 `--ephemeral`,否则无法 resume)。
-- **第 2 轮起**:`codex exec resume <thread_id> ...` 按 **id** 续接,只发**增量**(逐条回应 + 修订后主张 + 携带未确认 candidate,见 §5),不必重发整包,省 token。⚠️ **resume 的 flag 集与 fresh 不同**:`exec resume` 接受 `--json`/`--output-schema`/`-o`/`-m`/`--skip-git-repo-check`,但**不接受 `-s`/`--cd`**(实测 0.135.0:传了报 `unexpected argument` 退出 2)。故 resume 轮必须省去 `-s`/`--cd`(沙箱与 cwd 从原 session 继承)。`buildCodexArgs` 已据此分支,`tests/codex-round.test.mjs` 有回归守护(mock 在 resume 下拒绝 `-s`/`--cd`)。
+- **第 2 轮起**:`codex exec resume <thread_id> ...` 按 **id** 续接,只发**增量**(逐条回应 + 修订后主张 + 携带未确认 candidate,见 §5),不必重发整包,省 token。⚠️ **resume 的 flag 集与 fresh 不同**:`exec resume` 接受 `--json`/`--output-schema`/`-o`/`-m`/`--skip-git-repo-check`,但**不接受 `-s`/`--cd`**(实测 0.135.0:传了报 `unexpected argument` 退出 2)。故 resume 轮省去 `-s`/`--cd`;但 ⚠️ **沙箱并不从 session 继承**(实测会回落到可写沙箱,CR-SEC-001/§12),故 resume 必须改用 `-c sandbox_mode="read-only"` 显式重申只读(cwd 仍从 session 继承,未单独实测)。`buildCodexArgs` 已据此分支,`tests/codex-round.test.mjs` 有回归守护(mock 在 resume 下拒绝 `-s`/`--cd`;并断言 resume argv 含只读 override)。
 - **必须按 id,不能用 `--last`**(已实证,codex-cli 0.135.0):`resume --last` = 取**当前 cwd 下最近一条记录的 session**,它**只按 cwd 过滤、不区分 exec 与交互(`codex-tui`)会话**。我们的循环 `--cd <repo>` 跑在项目目录,用户若同时在同一目录手动开了 `codex`,`--last` 会**串到用户的交互会话**;本机还有 `codex-image-gen` 等也在调 codex。故只用捕获到的 `thread_id`。
 - **id 捕获用 stdout in-band 解析**,不靠"找 `~/.codex/sessions` 下最新文件"——后者有并发写竞态,等于另一种 `--last` 陷阱。
 
@@ -278,7 +286,7 @@ LLM 循环难做单元测试,采用:
 - ✅ **`--json` + `--output-schema` + `-o` 共存**:三者并列可正常工作,verdict 通过 `-o` 落盘;前提是 schema 满足 strict 模式(见 §6 ⚠️)。最初的非 strict schema 会让 codex 报 `invalid_json_schema` 并退出 1、不写文件——已修复并加 `verdict-schema.test.mjs` 守护。
 - ⚠️ codex 把 API 级错误写进 **stdout 的 `{"type":"error"}` / `turn.failed` 事件**(不是 stderr),且进程退出码为 1。脚本将这类「跑了但没产出合法 verdict」归为 `bad_verdict` 并带 `codex_exit`。
 
-- ✅ **`exec resume` 的 flag 集**(自评 dogfood 实测发现并修复):`codex exec resume` **不接受 `-s`/`--cd`**(传了报 `unexpected argument` 退出 2),最初实现照搬 fresh flag 导致**多轮 resume 在真机 100% 失败**——单测因 mock 接受任意参数而漏检。已修:resume 轮省去 `-s`/`--cd`(沙箱/cwd 从原 session 继承),`--output-schema`/`-o`/`--json`/`-m`/`--skip-git-repo-check` 保留;mock 改为在 resume 下拒绝 `-s`/`--cd` 做回归守护。
+- ✅ **`exec resume` 的 flag 集**(自评 dogfood 实测发现并修复):`codex exec resume` **不接受 `-s`/`--cd`**(传了报 `unexpected argument` 退出 2),最初实现照搬 fresh flag 导致**多轮 resume 在真机 100% 失败**——单测因 mock 接受任意参数而漏检。已修:resume 轮省去 `-s`/`--cd`(cwd 从原 session 继承;**沙箱不继承——后由 CR-SEC-001/v0.8.7 改用 `-c sandbox_mode="read-only"` 重申**),`--output-schema`/`-o`/`--json`/`-m`/`--skip-git-repo-check` 保留;mock 改为在 resume 下拒绝 `-s`/`--cd` 做回归守护。
 
 - ✅ **多轮 resume 端到端**(真·多轮 dogfood 实测):round 1 fresh 抓 `thread_id` → round 2 `exec resume <id>` 成功(exit 0),且 Codex **保留了第 1 轮上下文**并接上第 2 轮增量;`--output-schema` 在 resume 轮语义级生效(`truncated`/`reviewed_scope`/`assumptions` 正确填充)。即 resume 不只是参数被接受,而是真按 schema 产出 verdict。
 
@@ -288,7 +296,7 @@ LLM 循环难做单元测试,采用:
 
 ## 12. 效果提升路线图(经 Claude×Codex 互审收敛)
 
-> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0/v0.5.1/v0.6.0);P1 🟡 instrumentation 已实现(v0.7.0)、真机数据采集待做;P3 ✅ 脚手架(v0.8.0)+ A/B 实验(盲评,budget-6 共 4 任务含非代码 + budget-2 UNRESOLVED 样本):omission-check 高召回但精度优先 decide=keep_A,代码评审不宜默认开、但推荐用于提案/设计文档评审;P4 决策门 → scope-down:`--lens <name>` 单镜头功能已落地(实验性,仅 omission 验证),并行聚合版 full-P4 继续暂缓;v0.8.7 修复 CR-SEC-001(resume 只读沙箱逃逸,实测发现)**。优先级与语义经对抗式互审锁定。
+> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0/v0.5.1/v0.6.0);P1 🟡 instrumentation 已实现(v0.7.0)、真机数据采集待做;P3 ✅ 脚手架(v0.8.0)+ A/B 实验(盲评,budget-6 共 4 任务含非代码 + budget-2 UNRESOLVED 样本):omission-check 高召回但精度优先 decide=keep_A,代码评审不宜默认开、但推荐用于提案/设计文档评审;P4 决策门 → scope-down:`--lens <name>` 单镜头功能已落地(实验性,仅 omission 验证),并行聚合版 full-P4 继续暂缓;v0.8.7 修复 CR-SEC-001(resume 只读沙箱逃逸,实测发现);v0.8.8 用 `--lens security` 对抗式 dogfood 该修复、6 轮收敛,补 4 处安全加固(resume 注入校验/缺值 fail-closed/approval=never/--ignore-rules)并**定性验证 security 镜头有强检测力**(correctness/requirements 仍未验证)**。优先级与语义经对抗式互审锁定。
 
 - **P0 结构化协议(P2 的前置)— ✅ 已实现(v0.4.0)**:`verdict.schema.json` 已加 `remaining_issues[].id`(稳定 point_id)+ `candidate_dispositions[] = {id, disposition: confirmed|rejected}`(**事件**,非状态,首轮空数组);`codex-round.mjs` 已透传这两个字段(冒烟曾发现并修复其被 cherry-pick 丢弃;并收紧:缺 required 数组字段 → `bad_verdict` 不静默默认);`review.md` 已指示 Codex 产出 id/dispositions 并据此晋升;`rejected` 的点用同一 id 留在 remaining_issues。真机两轮 dogfood 验证 confirmed/rejected + id 跨轮稳定。
   - `state ∈ {open, candidate, agreed, merged}`(持久)、合并血缘 `merged_from/merged_into`、覆盖/未知ID/状态机不变量校验属 **Claude 侧账本**,由 P2 `review-state.mjs` 维护,**不进 Codex 输出 schema**(Codex 不拥有状态)。
@@ -316,6 +324,13 @@ LLM 循环难做单元测试,采用:
   - **证据边界**:**仅 `omission` 经 P3 验证**;security/correctness/requirements 为外推的**实验性**预设、未实测(且与默认 rubric 有重叠)。多镜头 = 多次独立调用,**结论不可组合**(那才是 full-P4)。
   - **协议要点(经 dogfood 闭合)**:effective_lens 归一(`--omission-check`≡`--lens omission`,冲突/未知/缺名报错)、镜头按材料模式过滤越界项(完全不匹配→报错)、持续镜头每轮增量重述、§7 输出标注镜头(provenance)、experiment run 带 `lens` 字段、成本表述去掉"1x"(无强制 fan-out、单镜头仍可能略增轮/墙钟)。
 
-- **CR-SEC-001 resume 只读沙箱逃逸(v0.8.7,实测发现并修复)**:验证"实验性镜头"(#7)时,审查 security 镜头的目标面(codex-round.mjs 的子进程/沙箱处理)发现一处**真实安全漏洞**——`codex exec resume` **不继承** fresh 轮的 `-s read-only`,实测会回落到默认可写沙箱(能写 `/tmp` 等)。原代码注释断言"resume 从原 session 继承沙箱",**实测证伪**:受控探针(fresh read-only 写入被阻断 → resume 同一 thread 写入**成功**,Codex 自报"The write succeeded")。这意味着此前**每次评审的第 2+ 轮 Codex 都不在只读模式**,违反"Codex 绝不能写文件"的硬不变量。**修复**:resume 不接受 `-s`,改用 `-c sandbox_mode="read-only"` 配置覆盖显式重申只读(实测 round3/round4 写入被阻断、exit 0 无 unexpected-argument;TOML 引号形式与字面量回退形式均验证)。加单测断言 resume argv 含该 override、fresh 不含。**附带结论(对 #7)**:security 视角在本代码库有真实检测力——直接推理即发现一处被"硬化过"的脚本仍遗留的安全洞;但这属直接发现,非受控 A/B(本仓库已硬化,缺乏每类潜在问题的新鲜素材,质量门 A/B 多半 inconclusive,见 #7 处理)。
+- **CR-SEC-001 resume 只读沙箱逃逸(v0.8.7,实测发现并修复)**:验证"实验性镜头"(#7)时,审查 security 镜头的目标面(codex-round.mjs 的子进程/沙箱处理)发现一处**真实安全漏洞**——`codex exec resume` **不继承** fresh 轮的 `-s read-only`,实测会回落到默认可写沙箱(能写 `/tmp` 等)。原代码注释断言"resume 从原 session 继承沙箱",**实测证伪**:受控探针(fresh read-only 写入被阻断 → resume 同一 thread 写入**成功**,Codex 自报"The write succeeded")。这意味着此前**每次评审的第 2+ 轮 Codex 都不在只读模式**,违反"Codex 绝不能写文件"的硬不变量。**修复**:resume 不接受 `-s`,改用 `-c sandbox_mode="read-only"` 配置覆盖显式重申只读(实测 round3/round4 写入被阻断、exit 0 无 unexpected-argument;TOML 引号形式与字面量回退形式均验证)。加单测断言 resume argv 含该 override、fresh 不含。
+- **CR-SEC 加固组 + #7 security 镜头验证(v0.8.8,用本工具 `--lens security` 对抗式 dogfood CR-SEC-001 修复,Codex 互审 6 轮收敛 RESOLVED)**:按 #7「对抗式 dogfood 验证修复」路径,用**真实评审循环 + `--lens security`** 复核 v0.8.7 修复本身,并以**修复后的** codex-round.mjs 驱动循环(故第 2+ 轮 resume 自身即活体验证只读路径)。6 轮收敛,security 镜头挖出 **5 条我自评漏掉的真问题** + 1 条我正确反驳:
+  - **CR-SEC-RESUME-OPTION-INJECTION(major,采纳)**:`--resume` 值未校验,`--resume --last` 等会被 codex 当作选项解析、绕过按 id 隔离。修:`isValidThreadId` 严格 UUID 校验,非法即 `bad_resume`/exit 2,绝不传给 codex。
+  - **CR-ARG-RESUME-MISSING(minor,采纳)**:`--resume` **缺值**时 `a.resume=undefined`,旧 `!= null` 守卫跳过校验 → 静默退化成 fresh 轮(fail-open)。修:改严格 `!== null`,缺值 → fail-closed `bad_resume`。
+  - **CR-SEC-CONFIG-SIDECHANNELS(major,采纳要点 + 收窄主张)**:read-only 之外仍有两条模型命令写路径——① **审批升级**:加 `-c approval_policy="never"`(实测非交互 exec 下升级本就 unavailable,但显式锁定不依赖用户 config);② **execpolicy `allow` 规则**(官方语义:免提示、沙箱外运行):加 `--ignore-rules`(fresh/resume 均接受),令 `-s read-only` 成唯一权威上界。并实测确认 **CLI `-s` 覆盖用户 config.toml 的 sandbox_mode**。范围外仅余**用户自配 MCP/hooks/apps**(codex 外的独立工具),已显式记为信任边界(见上「只读不变量的精确范围与信任边界」)。诚实标注:execpolicy 逃逸**未实测复现**(`.rules` 格式不现成),改以"忽略 ambient rules"防御性关闭。
+  - **CR-DOC-INHERIT(minor,采纳)**:DESIGN 三处仍称"沙箱从 session 继承"已更正。
+  - **CR-SEC-OUT-PATH(major,反驳,Codex confirmed)**:`--out` 是 skill 设定的**可信内部参数**(指向临时文件),harness 写/删自身产物非"Codex 写文件"事件、非外部输入 → 不在威胁面内。Codex 接受反驳。
+  - **#7 结论(security 镜头)**:`--lens security` 在真实安全面代码上有**强检测力**——6 轮持续挖出我自评漏掉的、逐层深入的真问题(resume 注入 → fail-open → 审批升级 → execpolicy 规则),直到双 AGREE。这是**定性验证**(非 experiment.mjs 配对 A/B:本仓库已硬化、缺每类潜在问题的新鲜素材,质量门 A/B 多半 inconclusive)。`correctness`/`requirements` 仍**未验证**,保持 experimental 标记。
 
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。

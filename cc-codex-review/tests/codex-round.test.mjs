@@ -78,15 +78,56 @@ test('resume round: `exec resume <id>` re-asserts read-only via -c, NO -s/--cd, 
   // 必须用 -c sandbox_mode="read-only" 显式重申只读,否则第 2+ 轮 Codex 可写文件、违反只读不变量。
   const ci = argv.indexOf('-c');
   assert.ok(ci >= 0, 'resume MUST pass -c to re-assert the sandbox (read-only not inherited)');
-  assert.equal(argv[ci + 1], 'sandbox_mode="read-only"', 'resume MUST enforce read-only via config override (CR-SEC-001)');
+  assert.ok(argv.includes('sandbox_mode="read-only"'), 'resume MUST enforce read-only via config override (CR-SEC-001)');
+  assert.ok(argv.includes('approval_policy="never"'), 'resume MUST disable approval escalation (CR-SEC-CONFIG-SIDECHANNELS)');
+  assert.ok(argv.includes('--ignore-rules'), 'resume MUST ignore ambient execpolicy .rules (CR-SEC-CONFIG-SIDECHANNELS)');
   assert.ok(!argv.includes('--last'), 'must never use --last');
 });
 
-test('fresh round: uses -s read-only and does NOT need the -c override (CR-SEC-001)', () => {
+test('fresh round: -s read-only + approval_policy=never + --ignore-rules, no sandbox_mode override (CR-SEC-001/CONFIG-SIDECHANNELS)', () => {
   const argv = captureArgv([]);
   const si = argv.indexOf('-s');
   assert.ok(si >= 0 && argv[si + 1] === 'read-only', 'fresh enforces read-only via -s');
-  assert.ok(!argv.includes('-c'), 'fresh must not use the resume-only -c sandbox override');
+  assert.ok(!argv.includes('sandbox_mode="read-only"'), 'fresh must not use the resume-only sandbox_mode override');
+  assert.ok(argv.includes('approval_policy="never"'), 'fresh MUST also disable approval escalation');
+  assert.ok(argv.includes('--ignore-rules'), 'fresh MUST ignore ambient execpolicy .rules');
+});
+
+// 像 runRound,但容忍非零退出码(arg 错误用 exit 2;JSON 仍打到 stdout,bash 侧照常可读)。
+function runRoundExpectArgError(extraArgs, input, env = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'cc-round-'));
+  const out = join(dir, 'last.json');
+  let stdout;
+  try {
+    stdout = execFileSync('node', [ROUND, '--schema', SCHEMA, '--out', out, ...extraArgs],
+      { input, encoding: 'utf8', env: { ...process.env, CODEX_BIN: MOCK, ...env } });
+  } catch (e) { stdout = e.stdout || ''; }
+  return JSON.parse(stdout.trim().split('\n').filter(Boolean).pop());
+}
+
+test('resume id injection: non-UUID --resume is rejected (bad_resume), never spawned (CR-SEC-RESUME-OPTION-INJECTION)', () => {
+  for (const bad of ['--last', '--foo', 'not-a-uuid', '019e2222', '../../etc/passwd']) {
+    const res = runRoundExpectArgError(['--resume', bad], 'DELTA', {
+      MOCK_VERDICT: JSON.stringify({ verdict: 'AGREE', remaining_issues: [], candidate_dispositions: [], rationale: 'x', truncated: false, reviewed_scope: 's', assumptions: [] }),
+    });
+    assert.equal(res.ok, false, `must reject non-UUID resume: ${bad}`);
+    assert.equal(res.error, 'bad_resume', `must flag bad_resume for: ${bad}`);
+  }
+});
+
+test('resume missing value: `--resume` with no value fails closed (bad_resume), not a silent fresh round (CR-ARG-RESUME-MISSING)', () => {
+  const res = runRoundExpectArgError(['--resume'], 'PACKET', {
+    MOCK_VERDICT: JSON.stringify({ verdict: 'AGREE', remaining_issues: [], candidate_dispositions: [], rationale: 'x', truncated: false, reviewed_scope: 's', assumptions: [] }),
+  });
+  assert.equal(res.ok, false, 'missing --resume value must not silently run fresh');
+  assert.equal(res.error, 'bad_resume');
+});
+
+test('resume id injection: a valid UUID --resume is accepted', () => {
+  const res = runRound(['--resume', '019eab2c-1662-79d2-a398-3b5f05122c8e'], 'DELTA', {
+    MOCK_VERDICT: JSON.stringify({ verdict: 'CHANGES', remaining_issues: [], candidate_dispositions: [], rationale: 'ok', truncated: false, reviewed_scope: 's', assumptions: [] }),
+  });
+  assert.equal(res.ok, true, 'valid UUID resume must be accepted');
 });
 
 test('resume round: actually succeeds against realistic mock (#6 regression)', () => {

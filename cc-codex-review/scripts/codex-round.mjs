@@ -16,6 +16,11 @@ function parseArgs(argv) {
   return a;
 }
 
+// thread id 形如 UUID(codex 0.135.0 用 UUIDv7,如 019eab2c-1662-79d2-a398-3b5f05122c8e)。
+// 严格 8-4-4-4-12 hex:杜绝以 `-`/`--` 开头(或任意非 UUID)的值被 codex 自身 argv 解析当成
+// CLI 选项(如 `--last` 会绕过按 id 隔离、可能串入其它会话);spawnSync 无 shell 不防此点,须在传入前把关(CR-SEC-RESUME-OPTION-INJECTION)。
+const isValidThreadId = (s) => typeof s === 'string' && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(s);
+
 function buildCodexArgs(a) {
   const args = ['exec'];
   if (a.resume) args.push('resume', a.resume);
@@ -31,6 +36,16 @@ function buildCodexArgs(a) {
     args.push('-s', 'read-only');
     if (a.repo) args.push('--cd', a.repo);
   }
+  // 双保险:显式禁用审批升级(CR-SEC-CONFIG-SIDECHANNELS)。read-only 下被拒的写命令,
+  // 若 approval_policy 允许升级,理论上可被"批准后无沙箱重试"而落盘。实测(0.135.0 非交互 exec):
+  // 即便 approval_policy=on-failure,升级也"unavailable"(无审批人)、写入仍被阻断;但显式 `never`
+  // 使该"无升级写路径"保证**不依赖**用户 config 默认或未来行为变更。两轮(fresh/resume)都加。
+  args.push('-c', 'approval_policy="never"');
+  // 不加载用户/项目 execpolicy `.rules`(CR-SEC-CONFIG-SIDECHANNELS)。官方语义:rule `decision="allow"`
+  // 可让命令"免提示、在沙箱外运行"。本工具是只读复核方,**绝不应**让宿主环境里的 ambient `.rules`
+  // 放宽复核沙箱的牢笼;`--ignore-rules` 使本次调用忽略全部 .rules、令 `-s read-only` 成为唯一权威上界。
+  // fresh 与 resume 都接受该 flag(实测 0.135.0)。
+  args.push('--ignore-rules');
   // 两种模式都接受 --skip-git-repo-check;总是加上,使非 git 目录的 --repo 也能用(文本评审)。
   args.push('--skip-git-repo-check');
   if (a.model) args.push('-m', a.model);
@@ -100,6 +115,15 @@ function main() {
   const a = parseArgs(process.argv.slice(2));
   if (!a.schema || !a.out) {
     emit({ ok: false, error: 'usage', detail: '--schema and --out are required' });
+    process.exit(2);
+  }
+  // CR-SEC-RESUME-OPTION-INJECTION + CR-ARG-RESUME-MISSING:resume 值须为合法 thread id(UUID),否则拒绝,
+  // 防 `--resume --last` 之类被 codex 当作选项解析、绕过按 id 隔离。
+  // 用严格 `!== null`:未给 `--resume` 时 a.resume 为初始 null → 跳过(走 fresh);
+  // 给了 `--resume` 但缺值时 a.resume 为 undefined(`undefined !== null` 为真)→ 进入校验 → fail-closed 报错,
+  // 不静默退化成 fresh 轮(CR-ARG-RESUME-MISSING)。
+  if (a.resume !== null && !isValidThreadId(a.resume)) {
+    emit({ ok: false, error: 'bad_resume', detail: `--resume 须为合法 thread id(UUID 形式),收到:${JSON.stringify(a.resume)}` });
     process.exit(2);
   }
   const bin = process.env.CODEX_BIN || 'codex';

@@ -209,4 +209,4 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ## 注意
 - 只有真的无异议才输出 AGREE;不认同 Codex 就带理由反驳,而非投降。顺从式同意视为失败。
 - 临时文件放系统临时目录,用完可留痕便于排查。
-- 绝不让 Codex 写文件:脚本全程强制只读 —— fresh 轮 `-s read-only`,resume 轮 `-c sandbox_mode="read-only"`(实测 resume **不继承** fresh 的只读、会回落到可写沙箱,故须显式重申;CR-SEC-001,见 DESIGN §12)。
+- 绝不让 Codex 通过**模型生成的命令(shell/apply_patch)**写文件:脚本全程强制只读 —— fresh 轮 `-s read-only`,resume 轮 `-c sandbox_mode="read-only"`(实测 resume **不继承** fresh 的只读、会回落到可写沙箱,故须显式重申;CR-SEC-001)。该"绝不能写"的精确范围与信任边界(用户自配 MCP/hooks/apps 不在沙箱治理内、属显式信任边界)见 DESIGN §「只读不变量的精确范围与信任边界」。
