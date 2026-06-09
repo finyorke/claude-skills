@@ -20,9 +20,14 @@ function buildCodexArgs(a) {
   const args = ['exec'];
   if (a.resume) args.push('resume', a.resume);
   args.push('--json', '--output-schema', a.schema, '-o', a.out);
-  // 沙箱与工作目录:fresh 时显式设置。`codex exec resume` 不接受 -s/--cd
-  // (实测 0.135.0 报 "unexpected argument" 退出 2);resume 从原 session 继承,故略过。
-  if (!a.resume) {
+  // 沙箱:Codex 必须全程只读(硬不变量,绝不让 Codex 写文件)。
+  // fresh 用 -s read-only;resume 不接受 -s/--cd(实测 0.135.0 报 "unexpected argument" 退出 2)。
+  // ⚠️ 实测(0.135.0):resume **不继承** fresh 的 read-only,会回落到默认可写沙箱(能写 /tmp 等),
+  //    若仅靠"继承"则第 2+ 轮 Codex 可写文件,违反只读不变量(CR-SEC-001)。
+  //    故 resume 必须用 `-c sandbox_mode="read-only"` 显式重申(实测写入被阻断、exit 0 无 unexpected-argument)。
+  if (a.resume) {
+    args.push('-c', 'sandbox_mode="read-only"');
+  } else {
     args.push('-s', 'read-only');
     if (a.repo) args.push('--cd', a.repo);
   }

@@ -143,7 +143,7 @@ codex exec \
   "<对抗复核指令>"  < packet.txt
 ```
 
-- `-s read-only`:只读沙箱 —— Codex 能读文件、跑 git,但**绝不能写**(复核专用,安全)。**仅 fresh 轮传**;`codex exec resume` 不接受 `-s`,沙箱从原 session 继承。
+- `-s read-only`:只读沙箱 —— Codex 能读文件、跑 git,但**绝不能写**(复核专用,安全)。fresh 轮用 `-s read-only`;`codex exec resume` 不接受 `-s`。⚠️ **实测(0.135.0):resume 并不继承 fresh 的 read-only,会回落到默认可写沙箱**(CR-SEC-001,§12),故 resume 必须用 `-c sandbox_mode="read-only"` 显式重申只读 —— 否则第 2+ 轮 Codex 可写文件,违反"绝不能写"的硬不变量。
 - `--cd <repo>`:`--repo` 给定时设为工作根。**仅 fresh 轮传**;resume 不接受 `--cd`,工作目录从原 session 继承。
 - `--skip-git-repo-check`:**两种轮次都传**(exec 与 exec resume 都接受)。这样非 git 的 `--repo` 目录也能跑(退化为文本评审),与 §8 一致。
 - `--output-schema` + `-o`:Codex 输出结构化 verdict,AGREE 判定可靠(不靠字符串匹配)。`-o` 写入最终消息文件,便于捕获。**每次调用前都会先删除该文件**,避免读到上一轮残留 → 假成功。
@@ -288,7 +288,7 @@ LLM 循环难做单元测试,采用:
 
 ## 12. 效果提升路线图(经 Claude×Codex 互审收敛)
 
-> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0/v0.5.1/v0.6.0);P1 🟡 instrumentation 已实现(v0.7.0)、真机数据采集待做;P3 ✅ 脚手架(v0.8.0)+ A/B 实验(盲评,budget-6 共 4 任务含非代码 + budget-2 UNRESOLVED 样本):omission-check 高召回但精度优先 decide=keep_A,代码评审不宜默认开、但推荐用于提案/设计文档评审;P4 决策门 → scope-down:`--lens <name>` 单镜头功能已落地(实验性,仅 omission 验证),并行聚合版 full-P4 继续暂缓**。优先级与语义经对抗式互审锁定。
+> 进度:**P0 ✅(v0.4.0)、P2 ✅(v0.5.0/v0.5.1/v0.6.0);P1 🟡 instrumentation 已实现(v0.7.0)、真机数据采集待做;P3 ✅ 脚手架(v0.8.0)+ A/B 实验(盲评,budget-6 共 4 任务含非代码 + budget-2 UNRESOLVED 样本):omission-check 高召回但精度优先 decide=keep_A,代码评审不宜默认开、但推荐用于提案/设计文档评审;P4 决策门 → scope-down:`--lens <name>` 单镜头功能已落地(实验性,仅 omission 验证),并行聚合版 full-P4 继续暂缓;v0.8.7 修复 CR-SEC-001(resume 只读沙箱逃逸,实测发现)**。优先级与语义经对抗式互审锁定。
 
 - **P0 结构化协议(P2 的前置)— ✅ 已实现(v0.4.0)**:`verdict.schema.json` 已加 `remaining_issues[].id`(稳定 point_id)+ `candidate_dispositions[] = {id, disposition: confirmed|rejected}`(**事件**,非状态,首轮空数组);`codex-round.mjs` 已透传这两个字段(冒烟曾发现并修复其被 cherry-pick 丢弃;并收紧:缺 required 数组字段 → `bad_verdict` 不静默默认);`review.md` 已指示 Codex 产出 id/dispositions 并据此晋升;`rejected` 的点用同一 id 留在 remaining_issues。真机两轮 dogfood 验证 confirmed/rejected + id 跨轮稳定。
   - `state ∈ {open, candidate, agreed, merged}`(持久)、合并血缘 `merged_from/merged_into`、覆盖/未知ID/状态机不变量校验属 **Claude 侧账本**,由 P2 `review-state.mjs` 维护,**不进 Codex 输出 schema**(Codex 不拥有状态)。
@@ -315,5 +315,7 @@ LLM 循环难做单元测试,采用:
   - **改做最小可行形态 `--lens <name>`**:把 `--omission-check` 泛化为可选**单镜头**(omission/security/correctness/requirements),**单次、opt-in、复用全部现有协议**——一次只有一个镜头、产出并入同一 `remaining_issues`,故根上不出现聚合/跨lens状态/收敛重定义(避开全部 4 个 blocker)。镜头 = "通用评审 + 额外侧重",**AGREE 仍是全面签核**(LENS-SCOPE)。
   - **证据边界**:**仅 `omission` 经 P3 验证**;security/correctness/requirements 为外推的**实验性**预设、未实测(且与默认 rubric 有重叠)。多镜头 = 多次独立调用,**结论不可组合**(那才是 full-P4)。
   - **协议要点(经 dogfood 闭合)**:effective_lens 归一(`--omission-check`≡`--lens omission`,冲突/未知/缺名报错)、镜头按材料模式过滤越界项(完全不匹配→报错)、持续镜头每轮增量重述、§7 输出标注镜头(provenance)、experiment run 带 `lens` 字段、成本表述去掉"1x"(无强制 fan-out、单镜头仍可能略增轮/墙钟)。
+
+- **CR-SEC-001 resume 只读沙箱逃逸(v0.8.7,实测发现并修复)**:验证"实验性镜头"(#7)时,审查 security 镜头的目标面(codex-round.mjs 的子进程/沙箱处理)发现一处**真实安全漏洞**——`codex exec resume` **不继承** fresh 轮的 `-s read-only`,实测会回落到默认可写沙箱(能写 `/tmp` 等)。原代码注释断言"resume 从原 session 继承沙箱",**实测证伪**:受控探针(fresh read-only 写入被阻断 → resume 同一 thread 写入**成功**,Codex 自报"The write succeeded")。这意味着此前**每次评审的第 2+ 轮 Codex 都不在只读模式**,违反"Codex 绝不能写文件"的硬不变量。**修复**:resume 不接受 `-s`,改用 `-c sandbox_mode="read-only"` 配置覆盖显式重申只读(实测 round3/round4 写入被阻断、exit 0 无 unexpected-argument;TOML 引号形式与字面量回退形式均验证)。加单测断言 resume argv 含该 override、fresh 不含。**附带结论(对 #7)**:security 视角在本代码库有真实检测力——直接推理即发现一处被"硬化过"的脚本仍遗留的安全洞;但这属直接发现,非受控 A/B(本仓库已硬化,缺乏每类潜在问题的新鲜素材,质量门 A/B 多半 inconclusive,见 #7 处理)。
 
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。

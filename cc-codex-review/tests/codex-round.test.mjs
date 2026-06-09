@@ -65,16 +65,28 @@ test('fresh round: --repo => --cd <dir> AND --skip-git-repo-check (#7 non-git ok
   assert.ok(argv.includes('--skip-git-repo-check'), 'must also skip git check so non-git --repo works');
 });
 
-test('resume round: argv has `exec resume <id>`, NO -s, NO --cd, never --last (#6)', () => {
+test('resume round: `exec resume <id>` re-asserts read-only via -c, NO -s/--cd, never --last (#6, CR-SEC-001)', () => {
   const TID = '019e2222-bbbb-7000-8000-0000000def01';
   const argv = captureArgv(['--resume', TID, '--repo', '/some/repo']);
   assert.equal(argv[0], 'exec');
   const ri = argv.indexOf('resume');
   assert.ok(ri >= 0, 'should call exec resume');
   assert.equal(argv[ri + 1], TID, 'resume must be followed by the captured thread id');
-  assert.ok(!argv.includes('-s'), 'resume must NOT pass -s (exec resume rejects it)');
-  assert.ok(!argv.includes('--cd'), 'resume must NOT pass --cd (inherited from session)');
+  assert.ok(!argv.includes('-s'), 'resume must NOT pass -s (exec resume rejects it with exit 2)');
+  assert.ok(!argv.includes('--cd'), 'resume must NOT pass --cd (exec resume rejects it with exit 2)');
+  // CR-SEC-001: 实测 resume 不继承 fresh 的 read-only(回落到默认可写沙箱,能写 /tmp),
+  // 必须用 -c sandbox_mode="read-only" 显式重申只读,否则第 2+ 轮 Codex 可写文件、违反只读不变量。
+  const ci = argv.indexOf('-c');
+  assert.ok(ci >= 0, 'resume MUST pass -c to re-assert the sandbox (read-only not inherited)');
+  assert.equal(argv[ci + 1], 'sandbox_mode="read-only"', 'resume MUST enforce read-only via config override (CR-SEC-001)');
   assert.ok(!argv.includes('--last'), 'must never use --last');
+});
+
+test('fresh round: uses -s read-only and does NOT need the -c override (CR-SEC-001)', () => {
+  const argv = captureArgv([]);
+  const si = argv.indexOf('-s');
+  assert.ok(si >= 0 && argv[si + 1] === 'read-only', 'fresh enforces read-only via -s');
+  assert.ok(!argv.includes('-c'), 'fresh must not use the resume-only -c sandbox override');
 });
 
 test('resume round: actually succeeds against realistic mock (#6 regression)', () => {
