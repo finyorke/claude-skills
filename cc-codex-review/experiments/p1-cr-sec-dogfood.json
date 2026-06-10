@@ -1,0 +1,30 @@
+{
+  "_doc": "P1 真机度量数据(路线图 P1『真机数据采集』,见 DESIGN §12)。来源:v0.8.8 用本工具 `--lens security` 对抗式 dogfood CR-SEC-001 修复的真实 6 轮 codex-round 循环(收敛 RESOLVED)。records/aggregate 由 scripts/metrics.mjs 的 roundMetrics/aggregate 实跑产出(非手填):见本目录同名生成方式。这是首份真机 P1 数据,填补『instrumentation 已实现(v0.7.0)、真机数据待采』的缺口。",
+  "_source_run": {
+    "task": "CR-SEC-dogfood",
+    "lens": "security",
+    "thread_id": "019eab2c-1662-79d2-a398-3b5f05122c8e",
+    "rounds": 6,
+    "outcome": "RESOLVED(双 AGREE)",
+    "issues_found": ["CONFIG-SIDECHANNELS(major)", "OUT-PATH(major,被反驳)", "RESUME-OPTION-INJECTION(major)", "DOC-INHERIT(minor)", "ARG-RESUME-MISSING(minor)"]
+  },
+  "_caveat_wall_clock": "wall_clock_ms 仅 R1(314457)、R2(169369)在 live run 中被捕获;R3–R6 当时未打印 .line、值已丢失 → 记为 null。故 aggregate.total_wall_clock_ms=null(allTimed=false),但 aggregate.complete=true(6 轮 issue 事件齐全、无丢轮)——正好演示 metrics 把『丢轮(complete)』与『未全计时(wall=null)』分开、不拿残缺计时伪装完整成本。",
+  "_analysis": {
+    "round_profile": "R1=发现(4 new);R2=峰值(1 new + 3 confirmed + 1 rejected);R3–R6=把单一硬骨头 CONFIG-SIDECHANNELS 经子机制逐层推进到收敛。即 6 轮里约 4 轮的成本集中在一个 major issue 的收敛上——『成本集中于单一难点』的真机佐证。",
+    "revision_induced": "ARG-RESUME-MISSING(R2 的唯一 new)是 revision_induced=1 的教科书样本:它**只因** R1 采纳 C1(resume UUID 校验)引入的守卫带 fail-open `!=` 缺陷才暴露——修订诱发的新问题,正是该标签要捕捉的。",
+    "stuck_vs_productive_repeat": "CONFIG-SIDECHANNELS 在 R2–R5 连续 repeat=1,但 stuck=0:它每轮**实质推进**(approval 升级 → execpolicy allow 规则 → CLI 覆盖 config 的实测),并非『连续≥2 轮实质未变』。结论:**id 维度的 repeat ≠ stuck**;stuck 需 Claude 语义判断(本数据据实标 stuck=[]),metrics 设计把 stuck 作为 ⊆repeat 的正交标签、不自动把 repeat 当 stuck,正确区分了『卡住』与『有进展的反复』。"
+  },
+  "records": [
+    { "round": 1, "new": 4, "revision_induced": 0, "repeat": 0, "stuck": 0, "confirmed": 0, "rejected": 0, "wall_clock_ms": 314457, "attempts": 1 },
+    { "round": 2, "new": 1, "revision_induced": 1, "repeat": 1, "stuck": 0, "confirmed": 3, "rejected": 1, "wall_clock_ms": 169369, "attempts": 1 },
+    { "round": 3, "new": 0, "revision_induced": 0, "repeat": 1, "stuck": 0, "confirmed": 1, "rejected": 1, "wall_clock_ms": null, "attempts": 1 },
+    { "round": 4, "new": 0, "revision_induced": 0, "repeat": 1, "stuck": 0, "confirmed": 0, "rejected": 1, "wall_clock_ms": null, "attempts": 1 },
+    { "round": 5, "new": 0, "revision_induced": 0, "repeat": 1, "stuck": 0, "confirmed": 0, "rejected": 1, "wall_clock_ms": null, "attempts": 1 },
+    { "round": 6, "new": 0, "revision_induced": 0, "repeat": 0, "stuck": 0, "confirmed": 1, "rejected": 0, "wall_clock_ms": null, "attempts": 1 }
+  ],
+  "aggregate": {
+    "rounds": 6, "expected_rounds": 6, "complete": true,
+    "new": 5, "revision_induced": 1, "repeat": 4, "stuck": 0,
+    "confirmed": 5, "rejected": 4, "total_wall_clock_ms": null, "retried_rounds": 0
+  }
+}
