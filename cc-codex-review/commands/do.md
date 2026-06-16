@@ -16,20 +16,23 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion
 - **复杂 / 有方案空间**(做页面、实现功能、设计)→ 走完整协作 §3–§6。
 
 ## 3. 双方独立出方案(仅复杂任务)
-1. 你(Claude)**先独立**想一个方案并写下(**先不给 Codex 看**,避免锚定它)。
-2. 调脚本让 Codex **独立**基于同一任务出方案(packet **只含任务、不含你的方案**):
+1. 你(Claude)**先独立**想一个方案,只放在**对话 / scratch(你的私有上下文)**——**绝不写进 repo、不进 packet、不放任何 Codex 可读的位置**(否则 Codex 出方案时会读到、被你锚定)。
+2. 调脚本让 Codex **独立**基于同一任务出方案(**必须加 `--raw`**:plan 是非 verdict 结构;packet **只含任务、不含你的方案**):
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-round.mjs" \
-     --schema "${CLAUDE_PLUGIN_ROOT}/schemas/plan.schema.json" \
+     --schema "${CLAUDE_PLUGIN_ROOT}/schemas/plan.schema.json" --raw \
      --out "<临时 plan.json>" [--repo <dir>] < <只含任务的 packet>
    ```
-   解析其 `plan/steps/assumptions/risks`。`error=codex_unavailable` → 提示用户运行 `/codex:setup` 并停。
+   - 成功:`{ok:true, result:{plan,steps,assumptions,risks}}` —— 取 `result`。
+   - `error=codex_unavailable` → 提示用户运行 `/codex:setup` 并停;其它 `ok:false`(如 bad_verdict)→ 把 error 告诉用户并停。
+   - ⚠️ 若带 `--repo`:确保 repo 工作树里**没有你刚写的方案**(你本就不该写进去),避免 Codex 读到而被锚定。
 3. 现在有**两个独立方案**(你的 + Codex 的)。
 
 ## 4. 对抗到统一(仅复杂任务)
-- 摆出两方案,逐点对比:**一致的** / **分歧的**。
-- 对分歧走互审(复用 `review` 的协议与 `${CLAUDE_PLUGIN_ROOT}/scripts/review-state.mjs` 记账:你采纳或带理由反驳,Codex 裁定),收敛到**统一方案**。轮数上限 = `--max-rounds`(默认 3)。
-- **到顶 / 僵持**:**不假装统一** → 产出「双方已一致的方案骨架 + 仍分歧的几处(各自主张 + 严重度)」,请用户拍板要不要继续 / 怎么定,再决定是否执行。
+1. 逐点对比两方案,分成 **一致点** / **分歧点**;**每点标来源**(来自你的方案 / Codex 方案 / 两者)。
+2. 对**每个分歧点**走互审(复用 review 协议 + `${CLAUDE_PLUGIN_ROOT}/scripts/review-state.mjs` 记账):把"该分歧点 + 双方各自主张"写成 packet,调 codex-round(**verdict schema,不加 --raw**)让 Codex 裁定;你采纳或带理由反驳。每个分歧点当一条带稳定 id 的 issue,走 open→candidate→agreed 直到了结。
+3. **统一方案 = 全部分歧点了结(agreed)**。轮数上限 = `--max-rounds`(默认 3)。
+4. **到顶 / 僵持**(仍有分歧点未了结):**不假装统一** → 产出「**已一致的方案骨架**(每点标来源)+ **仍分歧的几处**(各自主张 + 严重度)」,请用户拍板要不要继续 / 怎么定,再决定是否执行。
 
 ## 5. 执行(Claude 动手)
 按统一方案(或用户拍板后的方案),你用 Write/Edit/Bash 动手做。**Codex 不参与写**。
@@ -44,7 +47,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-round.mjs" \
 Codex 给 `CHANGES` 且有实质问题 → 修 → 再复核(同样受 `--max-rounds` 约束;到顶把未决问题如实告诉用户)。
 
 ## 7. 产出
-返回做完的东西 + 待用户拍板的点(若有)。琐碎任务直接给结果。
+返回做完的东西 + 待用户拍板的点(若有)。**统一方案 / 关键结论的每一条都附来源**(依据了哪段代码 / 事实 / 需求,或来自谁的方案、哪轮达成),可溯源、可核对。琐碎任务直接给结果(复核结论也注明依据)。
 
 ## 注意
 - **Codex 全程只读**(codex-round 已固定只读沙箱),绝不让它写文件;动手只由你(Claude)。

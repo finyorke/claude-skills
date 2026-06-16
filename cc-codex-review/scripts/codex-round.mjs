@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 
 function parseArgs(argv) {
-  const a = { repo: null, model: null, resume: null, schema: null, out: null };
+  const a = { repo: null, model: null, resume: null, schema: null, out: null, raw: false };
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
     if (x === '--repo') a.repo = argv[++i];
@@ -12,6 +12,7 @@ function parseArgs(argv) {
     else if (x === '--resume') a.resume = argv[++i];
     else if (x === '--schema') a.schema = argv[++i];
     else if (x === '--out') a.out = argv[++i];
+    else if (x === '--raw') a.raw = true; // 非 verdict 用途(如 do 出方案):接受任意符合 --output-schema 的 JSON,不套 verdict 结构校验
   }
   return a;
 }
@@ -126,6 +127,8 @@ function main() {
     emit({ ok: false, error: 'bad_resume', detail: `--resume 须为合法 thread id(UUID 形式),收到:${JSON.stringify(a.resume)}` });
     process.exit(2);
   }
+  // --raw:出方案等非 verdict 用途——只要 codex 写出合法 JSON(符合传入的 --output-schema)即接受,不套 review 的 verdict 结构校验。
+  const accept = (v) => (a.raw ? (v !== null && typeof v === 'object') : isValidVerdict(v));
   const bin = process.env.CODEX_BIN || 'codex';
   const input = readFileSync(0, 'utf8'); // stdin 评审包
 
@@ -173,7 +176,7 @@ function main() {
     }
     rawMsg = attemptRaw; // 始终反映"最近一次尝试"的产出,与下方 codex_exit/stdout_tail 同属同一尝试
 
-    if (isValidVerdict(attemptVerdict)) {
+    if (accept(attemptVerdict)) {
       verdict = attemptVerdict;
       threadId = attemptThread || a.resume || null; // 仅取本次成功尝试的 thread;fresh 且无 thread.started 时给 null(不返回别次的陈旧 id,修 CR-THREAD-ATTEMPT)
       break;
@@ -183,7 +186,7 @@ function main() {
   // schema 是 strict、required 覆盖全部字段;若解析出的 verdict 缺这些 required 结构(枚举错、
   // remaining_issues / candidate_dispositions / assumptions 非数组),说明产出不合协议——
   // 视为 bad_verdict 而非静默默认成空,避免把协议异常报成功(修 RS-P0-BOUNDARY)。
-  if (!isValidVerdict(verdict)) {
+  if (!accept(verdict)) {
     // 无有效产出时,再看 stdout 的**错误类事件**是否藏着 auth 失败(codex 把 API 级错误放 --json stdout),据此归为 unavailable 而非 bad_verdict(修 CR-UNAUTH-STDOUT;仅扫错误事件,修 CR-UNAUTH-STDOUT-SCOPE)。
     if (stdoutHasAuthEvent(lastStdout)) {
       emit({ ok: false, error: 'codex_unavailable', detail: 'auth error in stdout events: ' + lastStdout.slice(-500).trim() });
@@ -199,6 +202,11 @@ function main() {
     process.exit(0);
   }
 
+  if (a.raw) {
+    // --raw:把 codex 按 --output-schema 写出的结构化产物原样放 result(do 出方案等非 verdict 用途)。
+    emit({ ok: true, thread_id: threadId, result: verdict, wall_clock_ms: Math.round(Number(process.hrtime.bigint() - startNs) / 1e6), attempts: attemptsMade });
+    return;
+  }
   emit({
     ok: true,
     thread_id: threadId,

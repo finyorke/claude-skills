@@ -130,6 +130,20 @@ test('resume id injection: a valid UUID --resume is accepted', () => {
   assert.equal(res.ok, true, 'valid UUID resume must be accepted');
 });
 
+test('--raw: 接受任意合法 JSON 放进 result(do 出方案用,不套 verdict 校验)', () => {
+  const planJson = JSON.stringify({ plan: 'P', steps: ['s1'], assumptions: [], risks: [] });
+  const res = runRound(['--raw'], 'TASK', { MOCK_VERDICT: planJson });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.result, { plan: 'P', steps: ['s1'], assumptions: [], risks: [] });
+  assert.equal(res.verdict, undefined, 'raw 模式不输出 verdict 字段');
+});
+
+test('不带 --raw:非 verdict 结构 JSON → bad_verdict(回归保护)', () => {
+  const res = runRound([], 'TASK', { MOCK_VERDICT: JSON.stringify({ plan: 'P', steps: [], assumptions: [], risks: [] }) });
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'bad_verdict');
+});
+
 test('resume round: actually succeeds against realistic mock (#6 regression)', () => {
   // realistic mock rejects -s/--cd under resume with exit 2; this only passes if the
   // script omits them on resume.
