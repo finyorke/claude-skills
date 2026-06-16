@@ -40,11 +40,11 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   - 实验对照工具:`scripts/experiment.mjs`(无镜头 vs `omission` 镜头 的配对比较 + 质量优先 decide;仅 omission 有数据,其余镜头待实验)。run 记录可带 `lens` 字段以区分不同镜头的数据(LENS-PROVENANCE)。
 - `--dry-run`:只组装并打印「评审包」+ 将要执行的命令,**不真正调用 Codex**,然后停止。
 
-硬上限优先级:`--max-rounds` flag > 评审指令自然语言里出现的轮数("最多 5 轮"等) > **内置默认上限 `5`**。
+硬上限优先级:`--max-rounds` flag > 评审指令自然语言里出现的轮数("最多 5 轮"等) > **内置默认上限 `3`**(质量优先:要的是暴露真问题,不是为收敛而多跑;想深挖再加 flag)。
 - **解析与归一化**:先得出 `max`(按上述优先级)。`max` 必须是**非负整数**;若解析出负数 / 非整数 / 无法识别的值 → **停止并报参数错误**,不要静默回退默认。再归一化出 `effective_max`:**仅当 `max` 来自 `--max-rounds 0`(flag)** → `effective_max=null`(无上限);否则 `effective_max=max`。**§6/§7 的「到顶」判定一律用 `effective_max`**(避免把 0 误当成"0 轮即终止")。
 - **自然语言轮数**:仅当评审指令里出现**明确的"最多/上限 N 轮"(N≥1)**才采纳;模糊措辞("多审几轮")不改默认。**自然语言里的"0 轮"不被接受为"无限"**(反直觉)——"无上限"只能由 flag `--max-rounds 0` 显式表达;自然语言 0 视为非法 → 报参数错误。
 - 设计原则:**有界是默认,放开是显式 opt-in**。对抗式复核里 Codex 常不会自然让步、停滞检测也可能不触发(它每轮挖出*新*问题就不算停滞),故默认必须有上限,否则可能无限循环、空烧 Codex 调用。
-- **默认 `5` 的定位**:它是**调用预算 / 成本天花板,不是"已充分收敛"的阈值**。到顶产出 UNRESOLVED 只代表"用完预算仍未双 AGREE",**不代表问题已穷尽**——下一轮可能仍在有效推进,故 UNRESOLVED 的裁决建议应据此提示"可调高 `--max-rounds` 继续"。
+- **默认 `3` 的定位**:它是**调用预算 / 成本天花板,不是"已充分收敛"的阈值**(实测多数 1–3 轮即暴露质量大头)。到顶产出 UNRESOLVED 只代表"用完预算仍未双 AGREE",**不代表问题已穷尽**——下一轮可能仍在有效推进,故 UNRESOLVED 的裁决建议应据此提示"可调高 `--max-rounds` 继续"。
 - 想多谈 → 调高 `--max-rounds`(如 `10`);想彻底放开 → 显式 `--max-rounds 0`(把"无上限"变成主动选择,而非默认)。
 - 门禁 / 签核场景:可按需调整,但**切勿用 `--max-rounds 0`**;宁可到顶产出「UNRESOLVED」也不要无限循环。
 
@@ -117,7 +117,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 - **参数解析回显**(使 §1 的解析对用户可眼检,而非只能信执行者)打印一行:
   `解析结果:effective_max=<n|null> (来源:flag/自然语言/默认) · max-rounds-raw=<原值> · repo=<…|无> · diff=<…|无> · plan=<…|无> · model=<…|默认> · effective_lens=<name|无>`
   - 归一化(§1)后回显 `effective_lens`(`--omission-check` 归一为 `omission`)。若 `--lens` 未知 name / `--lens`+`--omission-check` 冲突 / 镜头与材料完全不匹配 → dry-run **先打印解析错误并停止**:`解析错误:<原因>`。
-  - `effective_max=null` 表示无上限(仅 `--max-rounds 0` 会得到);来源标明该值取自 `--max-rounds` flag、自然语言「最多 N 轮」还是内置默认 5。
+  - `effective_max=null` 表示无上限(仅 `--max-rounds 0` 会得到);来源标明该值取自 `--max-rounds` flag、自然语言「最多 N 轮」还是内置默认 3。
   - 若参数非法(`--max-rounds` 为负/非整数、自然语言「0 轮」等,见 §1),dry-run 同样要**先打印解析错误并停止**:`解析错误:<原因>`,不组装评审包。
 
 ## 6. 互审循环
