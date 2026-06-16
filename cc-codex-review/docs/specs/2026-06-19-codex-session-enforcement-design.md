@@ -1,8 +1,11 @@
 # 设计 spec:强制真用 Codex(会话核对 + 收敛门禁)
 
 - 日期:2026-06-19
-- 状态:**brainstorm 已批准,待用户审 spec**
+- 状态:**已实现,但实现时降级**——见下「实现修订」
 - 关联:DESIGN §12;@cc-codex-review/scripts/review-state.mjs、commands/review.md、commands/do.md
+
+> **⚠️ 实现修订(2026-06-19,自举核对后):收敛门禁 → 软信号**
+> 本 spec 原设计的 §3.2 **收敛硬门禁**(`verifiedCodexRounds < 1` 拒 RESOLVED)在自举核对中被推翻:实测 **codex 偶发不落盘 rollout**(当前版本通常落、历史记录多在,但某些后台调用没落、resume 亦报 no-rollout;排除磁盘/权限,根因未定)。硬门禁会**错杀真互审**(真调了 Codex 却因没落盘被判 verified=0、拒 RESOLVED)。故**降级为软信号**:`verify-codex-session` 仍跑、结果仍附 §7,但 **`missing` ≠ 假互审**——不挡收敛、不判不可信,仅提示人工留意;`verified` 是"真调了 Codex"的证据。`converge` 不再接受 `verifiedCodexRounds` 参数。下文 §3.2/§3.3/§4/§5 保留原设计供溯源,以本修订为准。
 
 ## 1. 问题
 `review` / `do` 是 **prompt 级软约束**——只是叮嘱 Claude 去调 Codex 互审,没有任何东西**强制或验证**。Claude 可能(图省事或上下文紧张时)**自己 review、跳过真正的 Codex 调用**,却把结论说得像互审过。这架空了工具的核心价值(两个不同 AI 互审)。

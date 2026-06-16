@@ -267,7 +267,7 @@ export function validateState(state) {
 
 export const validate = validateState; // 向后兼容别名(结构校验)
 
-export function canConverge(state, codexVerdict, claudeAgree, verifiedCodexRounds) {
+export function canConverge(state, codexVerdict, claudeAgree) {
   // RS-P2-013-R3:导出函数本身也是收敛闸门,须与 CLI 同等 fail-closed —— 缺失/非数组 points 不得被当空账本放行。
   if (!state || !Array.isArray(state.points)) return { converged: false, reasons: ['state.points 缺失或非数组(fail-closed 拒收敛)'] };
   const pts = state.points || [];
@@ -282,10 +282,8 @@ export function canConverge(state, codexVerdict, claudeAgree, verifiedCodexRound
   if (claudeAgree !== true) reasons.push('Claude 仍持异议'); // RS-P2-013:仅严格布尔 true 算同意(杜绝 'false'/真值非 true 误判为同意→假收敛)
   if (cand > 0) reasons.push(`仍有 ${cand} 个 candidate 未被确认(收敛时须为空)`);
   if (open > 0) reasons.push(`仍有 ${open} 个 open 分歧`);
-  // 防假互审门禁:本次须有 ≥1 个经核实的 codex thread(由 verify-codex-session 核对 ~/.codex/sessions 得到)。
-  // 仅当**显式传入** verifiedCodexRounds 时施加(CLI converge 总传、fail-closed;省略=兼容旧调用、不施加)。
-  if (verifiedCodexRounds !== undefined && !(Number.isInteger(verifiedCodexRounds) && verifiedCodexRounds >= 1))
-    reasons.push('未经核实的 Codex 互审(verified codex 轮 < 1,防假互审 fail-closed)');
+  // 注:不在此做"verified codex 轮"硬门禁——实测 codex 偶发不落盘 rollout(~/.codex/sessions),
+  // 硬拒会错杀真互审;改为软信号(verify-codex-session 仅在 §7 附核对结果供人工留意,见 review.md/do.md)。
   return { converged: reasons.length === 0, reasons };
 }
 
@@ -368,9 +366,7 @@ if (isMain) {
       // RS-P2-013:converge 必须拿到显式 state.points——绝不对缺省空账本判收敛(否则缺 state 即假收敛)。
       if (!inp.state || !Array.isArray(inp.state.points)) { emit({ ok: false, error: 'missing_state', detail: 'converge 需显式 state.points;拒绝对缺省空账本判收敛(防假收敛)' }); process.exit(2); }
       if (typeof inp.claudeAgree !== 'boolean') { emit({ ok: false, error: 'bad_claudeAgree', detail: "claudeAgree 须为布尔 true/false(收到 " + JSON.stringify(inp.claudeAgree) + ")" }); process.exit(2); }
-      // 防假互审门禁(fail-closed):CLI 必须显式传 verifiedCodexRounds(非负整数),缺/非法即拒;<1 由 canConverge 拒收敛。
-      if (!Number.isInteger(inp.verifiedCodexRounds) || inp.verifiedCodexRounds < 0) { emit({ ok: false, error: 'bad_verified', detail: 'converge 需显式 verifiedCodexRounds(非负整数);= verify-codex-session 核实的 codex thread 数' }); process.exit(2); }
-      out = canConverge(inp.state, inp.codexVerdict, inp.claudeAgree, inp.verifiedCodexRounds);
+      out = canConverge(inp.state, inp.codexVerdict, inp.claudeAgree);
     }
     else if (cmd === 'counts') out = counts(inp.state || emptyState());
     else if (cmd === 'render-unresolved') out = { text: renderUnresolved(inp.state || emptyState(), inp.meta || {}) };
