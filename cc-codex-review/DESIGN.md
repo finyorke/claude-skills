@@ -73,6 +73,8 @@
 
 **配套命令 `extract-reqs`(需求提取,v0.9.0,见 §12 / `docs/specs/2026-06-12-extract-reqs-design.md`)**:`/cc-codex-review:extract-reqs [界定指令] [--out <path>]` —— 从当前会话提取**经用户背书的需求(纯 WHAT)**,按"是否经用户背书"分三档(纳入①用户直述 / ②Claude 提议+用户明确同意 · 待定③未表态 · 排除④Claude 单方设计)+ fail-closed 硬规则(②无用户明确同意原话→降级③)+ 用户确认,产出「用户认证需求」文件;再 `review --plan <该文件>` 即以**用户认证需求**(而非 Claude 单方转述)为评审基准。`[界定指令]` 可选,缺省时主动归纳范围、多块/模糊先问。
 
+**配套命令 `do`(协作执行,v0.10.0,见 §12 / `docs/specs/2026-06-19-collaborative-commands-design.md`)**:`/cc-codex-review:do <任务> [--repo <dir>] [--max-rounds <n>]` —— 你给任务(问答/动手,如「建 111.txt」「做个人主页」),Claude 动手做、Codex 只读协作把关;**复杂任务**双方各自独立出方案→对抗到统一(默认 3 轮,消除锚定),**琐碎任务**直接做+复核。Codex 全程只读、动手只由 Claude。
+
 ### 硬上限优先级
 
 `--max-rounds` flag > 指令自然语言("最多 5 轮"由 Claude 解析) > **内置默认上限 `5`**。
@@ -338,5 +340,7 @@ LLM 循环难做单元测试,采用:
 - **lens 解析脚本化 + 单测(v0.8.10,#15;补 #11 暴露的短板)**:#11 验收暴露 lens 是本项目唯一还纯靠 prompt 散文、只能手动验收的关键逻辑(codex-round/review-state/metrics/experiment 都已脚本化+测)。把**确定性部分**抽成 `scripts/lens-parse.mjs` 纯函数 `parseLens(argv)`(+ 薄 CLI stdin JSON→stdout JSON,与其它脚本一致):flag→`effective_lens`、`--omission-check`≡`--lens omission` 归一、`lens_unknown`/`lens_conflict`/`lens_missing_name`/`lens_duplicate` 报错;review.md §1 改为调它(`ok:false` 即报参数错误并停)。**判断型规则(⑲ 每轮重述、⑳ 材料过滤、㉑/LENS-DECLARE 声明)仍留 prompt**(需语义判断)。新增 `tests/lens-parse.test.mjs` 18 例(覆盖 ⑯⑰⑱ + CLI + 防御 + LP-CLI-INPUT fail-closed),全套 **147/147 绿**。收益:⑰⑱ 从手动验收升级为自动回归保护,补齐"关键逻辑皆脚本化+测"的一致性。自审 dogfood 第 1 轮发现 LP-CLI-INPUT(CLI 用 `|| []` 把缺失 argv 吞成无镜头)→ 改为 fail-closed(缺失/null argv → bad_input;`{argv:[]}` 显式空仍合法),Codex 2 轮确认。
 
 - **评审独立性泄漏点 + 需求提取 extract-reqs(**v0.9.0 已实现** prompt 命令 `commands/extract-reqs.md`;#16 brainstorm 产出)**:#16 从"并行多视角"探起,经用户连环追问**收敛到更根本的问题**——「评审的输入与裁决都经作者(Claude)一手过滤」。识别三个**独立性泄漏点**:① **需求**:Codex 看不到用户真需求,只看 Claude 单方转述(转述损耗 + 私货夹带,可使评审无法发现"方向跑偏");② **结论锚定**:Claude 把"结论+理由"塞进评审包,带偏 Codex 首判(A·反锚定);③ **兼裁判**:Claude 既驱动 review 又判收敛(运动员兼裁判)。三方角色厘清:用户=需求权威、Claude=实现者+驱动者、Codex=独立 reviewer。**首个落地设计 = `extract-reqs`**(MVP,独立命令):从当前会话提取**经用户背书的需求(纯 WHAT)**,按"是否经用户背书"分三档(纳入①用户直述/②Claude 提议+用户明确同意 · 待定③未表态 · 排除④Claude 单方设计)+ **fail-closed 硬规则**(②无用户明确同意原话→降级③)+ 用户确认,产出"用户认证需求"供 `review --plan`。spec:`docs/specs/2026-06-12-extract-reqs-design.md`。相关后续(未做):A 反锚定(藏 Claude 结论让 Codex 独立首判,当前窗口场景下"我那侧首判信息量低、独立视角全在 Codex")、兼裁判中立性。**实现验收(v0.9.0)**:实跑(拿本会话 extract-reqs 讨论自身作素材)spec §8 全 PASS——四档分档正确,且「WHAT/HOW 分离」因无用户单独同意原话被**正确降级③**(fail-closed 硬规则实证);Codex 自审 `commands/extract-reqs.md` 2 轮收敛 RESOLVED,修 I1(description "三档"→"四档")+ I2(补"语义可能误分类、确认非橡皮图章、无自动校验靠用户把关"的诚实局限提示)。**v0.9.1**:闭环 dogfood(经 skill 入口 `extract-reqs`→`review --plan` 审 lens 脚本化 #15)发现并修 2 点——§5 加**同源自证警示**(概括授权如"按你推荐的做"/需求与实现同源时,review 对"方向对不对"防自证力弱,须提示用户补独立验收标准)+ §6 加"已知局限"段;§1 去掉 `$ARGUMENTS` 反引号(无参数不再渲染空 inline-code)。Codex 自审 2 轮收敛。**附:此闭环本身验证了两命令经 skill 正式入口工作正常,且暴露 extract-reqs 的适用边界——强场景=用户有独立原创需求,弱场景="按你推荐的做"型同源任务。**
+
+- **协作执行命令 `do` + 三功能厘清(v0.10.0)**:补"给任务让两 AI 协作做掉"的入口(用户洞察:之前 review+extract-reqs 缺这个主入口)。三命令成流水线:`do`(做之中——Claude 动手 / Codex 只读把关;**复杂任务双方各自独立出方案→对抗到统一**消除锚定、琐碎任务直接做+复核;不自动越权,动手只 Claude)、`review`(做之后审)、`extract-reqs`(中间固化需求)。同时 review 默认轮数 5→3(质量优先,非为收敛而跑)、extract-reqs 加 `--depth`(看最近 n 轮)、新增 `schemas/plan.schema.json`(Codex 出方案的 strict 结构化输出)。spec:`docs/specs/2026-06-19-collaborative-commands-design.md`。
 
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。
