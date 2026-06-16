@@ -170,6 +170,13 @@ test('validateState: 正常合并通过', () => {
 
 // ---- canConverge ----
 
+test('canConverge 门禁:显式 verifiedCodexRounds<1 → 拒收敛(防假互审);≥1 放行;省略=旧行为不施加', () => {
+  const okState = { round: 1, points: [] };
+  assert.equal(canConverge(okState, 'AGREE', true, 0).converged, false, 'verified=0 应拒(防假互审)');
+  assert.equal(canConverge(okState, 'AGREE', true, 1).converged, true, 'verified>=1 应放行');
+  assert.equal(canConverge(okState, 'AGREE', true).converged, true, '省略第4参=旧行为(向后兼容)');
+});
+
 test('canConverge: candidate 非空 → 不可收敛(防假 RESOLVED)', () => {
   const r = canConverge({ round: 3, points: [{ id: 'I1', state: 'candidate' }] }, 'AGREE', true);
   assert.equal(r.converged, false);
@@ -526,9 +533,15 @@ test('RS-P2-013-R2: canConverge 对畸形/未知 state 的点 fail-closed(不假
   const r = canConverge(bogus, 'AGREE', true);
   assert.equal(r.converged, false, '未知 state 不得被漏掉而假收敛');
   assert.match(r.reasons.join('\n'), /结构非法/);
-  // CLI 同样 fail-closed
-  const c = rsCli('converge', { state: bogus, codexVerdict: 'AGREE', claudeAgree: true });
+  // CLI 同样 fail-closed(传 verifiedCodexRounds 以越过新门禁,测的是 state 结构 fail-closed)
+  const c = rsCli('converge', { state: bogus, codexVerdict: 'AGREE', claudeAgree: true, verifiedCodexRounds: 1 });
   assert.equal(c.out.converged, false);
+});
+
+test('CLI converge 缺 verifiedCodexRounds → bad_verified(fail-closed 防假互审)', () => {
+  const r = rsCli('converge', { state: { round: 1, points: [] }, codexVerdict: 'AGREE', claudeAgree: true });
+  assert.equal(r.out.ok, false);
+  assert.equal(r.out.error, 'bad_verified');
 });
 
 test('RS-P2-013-R3: canConverge 函数对缺/非数组 points fail-closed(与 CLI 一致)', () => {
