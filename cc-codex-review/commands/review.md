@@ -132,11 +132,12 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   - `validate-round`(在 `reduce` **之前**,对上一轮 state 校验本轮事件协议):disposition 覆盖全部 candidate、不引用未知/非 candidate、confirmed/rejected 与 remaining_issues 一致、adopted 只作用于 open、merge 前置态。**有 error 就先停、按协议异常处理,别带病 reduce。**
   - `reduce`(`{prevState, round}`→新 state):把本轮语义决策(`adopted`/`rebutted`/`candidate_dispositions`/`merges`/`annotations`)施加为状态迁移。
   - `validate-state`(对 reduce 后的新 state):id 唯一、合并图双向 reciprocity 且目标为活跃点(无链/环)等结构不变量。
-  - `converge`(`{state, codexVerdict, claudeAgree}`):收敛闸门——candidate / open 非空一律拒(防假 RESOLVED)。
+  - `converge`(`{state, codexVerdict, claudeAgree, verifiedCodexRounds}`):收敛闸门——candidate / open 非空一律拒(防假 RESOLVED);**且 `verifiedCodexRounds < 1` 拒收敛(防假互审,见下「真用 Codex 核实」)**。
   - `render-unresolved`(`{state, meta}`):出四段块。
   - state 只在本次循环内传递、不持久化(守 §1);语义决策与分歧标注(annotations)仍由你(Claude)给,脚本不自行判断(守 §2)。
   - **每次 CLI 调用都须显式传 state(防漏传清空历史→假收敛,RS-P2-013-R1)**:`reduce`/`validate-round` 必须带 `prevState.points`(**第 1 轮显式传 `{"round":0,"points":[]}`**,不可省略);`converge` 必须带 `state.points` 且 `claudeAgree` 为严格布尔。脚本对缺省/坏输入返回 `{ok:false,error:...}` 而非默认放行。
 - **每轮记 P1 度量(`${CLAUDE_PLUGIN_ROOT}/scripts/metrics.mjs`)**:reduce 之后调 `round-metrics`(传 `prevState` + 本轮 `round`〔含你给的语义标签 `revision_induced`/`stuck`〕+ codex-round 输出的 `wall_clock_ms` 与 `attempts`)得本轮记录;循环结束 `aggregate` 汇总(含 `retried_rounds`=发生过重试的轮数)。**汇总时传 `expectedRounds`=本次循环已开始(`round++` 到达)的轮数**:若某轮因 `bad_verdict`/`codex_unavailable` 中断而没产出度量记录,`records.length < expectedRounds` → `complete:false` 且 `total_wall_clock_ms`/`retried_rounds` 归 null,**不拿残缺记录伪装完整成本**(修 MET-ERR-001)。`new/repeat` 由 id 是否在 prevState 出现**确定性判定**;`revision_induced`(⊆new:因上轮修订才出现)/`stuck`(⊆repeat:连续≥2 轮实质未变)由你据实标注。用于"轮次耗在新发现 vs 确认 vs 反复"的数据化复盘(跨 ≥3 个真实任务用 `aggregate-tasks`,各任务 `expectedRounds` 对齐传入)。**若套了镜头**,在 experiment run 记录里带 `lens=<effective_lens>`(LENS-PROVENANCE),使不同镜头的数据可区分、可同镜头比较。
+- **真用 Codex 核实(防假互审,`${CLAUDE_PLUGIN_ROOT}/scripts/verify-codex-session.mjs`)**:每轮 codex-round 返回的 `thread_id` 累积记录;**收敛前必须**把所有 thread_id 作 stdin `{threadIds:[...]}` 喂 verify-codex-session(它查 `~/.codex/sessions` 核对真有会话记录),取其 `verified.length` 作为 `verifiedCodexRounds` 传给 `converge`。你**编不出**真实存在的 thread_id → 若跳过 / 假装调用了 Codex,会被收敛门禁卡住(verified=0 拒 RESOLVED)。
 
 每轮:
 1. `round++`。
@@ -176,6 +177,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   ```
   若最后一轮 `truncated=true`,**必须**在结论顶部加一行 `⚠️ 基于截断材料(reviewed_scope: ...),非完整签核`,避免被误读为全量通过。
   **若本次有声明侧重角度(`effective_lens` 非空,*或*你据评审指令实际侧重了某视角,见 §1 LENS-DECLARE),必须**在结论顶部加一行 `本次侧重:<角度>(额外侧重此视角;通过=全面签核,非仅该视角)`(**无显式 `--lens` 的隐性侧重也要声明**;LENS-DECLARE/LENS-SCOPE)。
+  **必须**在结论里附:本次 codex `thread_id` 列表 + verify-codex-session 的 `verified`/`missing`。**若 `missing` 非空、或一个 verified 都没有 → 顶部加 `⚠️ 未经真实 Codex 互审核实,结论不可信`,且不得判 RESOLVED**(收敛门禁亦会拒)。
 - 未收敛(硬上限 / 停滞 / 用户打断):打印**结构化 UNRESOLVED 块**,供用户裁决。**必须既展示已达成的共识、也逐条标注未决分歧的类型与影响**,让用户能区分"地基已牢、只差几处"还是"全程在吵",并判断每条卡点要不要现在管:
   ```
   ⚠️ 未收敛(状态:UNRESOLVED · 原因:<到达 max-rounds / 停滞 / 用户打断>)
