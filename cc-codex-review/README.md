@@ -82,6 +82,7 @@
 - **Codex 全程只读**:fresh 轮 `-s read-only`、resume 轮 `-c sandbox_mode="read-only"` + `approval_policy="never"` + `--ignore-rules`,**绝不能改你的文件**(曾修过一个 resume 沙箱逃逸漏洞 CR-SEC-001)。
 - 关键逻辑都是**确定性脚本 + 单测**(`node --test cc-codex-review/tests/*.test.mjs`,当前 147 绿):防假收敛、防漏算。
 - 整套工具**被它自己审过**(dogfood)。
+- **防假互审**:`review`/`do` 的结论会附 codex `thread_id`,可在 `~/.codex/sessions` 核对"真的调了 Codex"(`verify-codex-session.mjs` + 收敛门禁:没真调就不许判 RESOLVED)。
 
 ## 更多
 设计、路线图与决策见 **`DESIGN.md`**(尤其 §12);需求提取的设计 spec 见 `docs/specs/2026-06-12-extract-reqs-design.md`。
