@@ -30,3 +30,13 @@ function assertStrict(node, path = '$') {
 test('verdict schema 满足 OpenAI strict 模式(每个对象的 required 覆盖全部属性)', () => {
   assertStrict(SCHEMA);
 });
+
+const PLAN_SCHEMA = JSON.parse(
+  readFileSync(resolve(HERE, '../schemas/plan.schema.json'), 'utf8')
+);
+
+test('plan schema(do 出方案用)满足 strict 模式 + required 覆盖 plan/steps/assumptions/risks', () => {
+  assertStrict(PLAN_SCHEMA);
+  assert.equal(PLAN_SCHEMA.additionalProperties, false);
+  assert.deepEqual(PLAN_SCHEMA.required.slice().sort(), ['assumptions', 'plan', 'risks', 'steps']);
+});

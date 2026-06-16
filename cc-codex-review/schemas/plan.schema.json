@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["plan", "steps", "assumptions", "risks"],
+  "properties": {
+    "plan": { "type": "string", "description": "方案正文:怎么做、关键取舍" },
+    "steps": { "type": "array", "items": { "type": "string" }, "description": "落地步骤(有序)" },
+    "assumptions": { "type": "array", "items": { "type": "string" }, "description": "为出此方案所做的假设" },
+    "risks": { "type": "array", "items": { "type": "string" }, "description": "已知风险 / 待澄清点" }
+  }
+}
