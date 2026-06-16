@@ -137,7 +137,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   - state 只在本次循环内传递、不持久化(守 §1);语义决策与分歧标注(annotations)仍由你(Claude)给,脚本不自行判断(守 §2)。
   - **每次 CLI 调用都须显式传 state(防漏传清空历史→假收敛,RS-P2-013-R1)**:`reduce`/`validate-round` 必须带 `prevState.points`(**第 1 轮显式传 `{"round":0,"points":[]}`**,不可省略);`converge` 必须带 `state.points` 且 `claudeAgree` 为严格布尔。脚本对缺省/坏输入返回 `{ok:false,error:...}` 而非默认放行。
 - **每轮记 P1 度量(`${CLAUDE_PLUGIN_ROOT}/scripts/metrics.mjs`)**:reduce 之后调 `round-metrics`(传 `prevState` + 本轮 `round`〔含你给的语义标签 `revision_induced`/`stuck`〕+ codex-round 输出的 `wall_clock_ms` 与 `attempts`)得本轮记录;循环结束 `aggregate` 汇总(含 `retried_rounds`=发生过重试的轮数)。**汇总时传 `expectedRounds`=本次循环已开始(`round++` 到达)的轮数**:若某轮因 `bad_verdict`/`codex_unavailable` 中断而没产出度量记录,`records.length < expectedRounds` → `complete:false` 且 `total_wall_clock_ms`/`retried_rounds` 归 null,**不拿残缺记录伪装完整成本**(修 MET-ERR-001)。`new/repeat` 由 id 是否在 prevState 出现**确定性判定**;`revision_induced`(⊆new:因上轮修订才出现)/`stuck`(⊆repeat:连续≥2 轮实质未变)由你据实标注。用于"轮次耗在新发现 vs 确认 vs 反复"的数据化复盘(跨 ≥3 个真实任务用 `aggregate-tasks`,各任务 `expectedRounds` 对齐传入)。**若套了镜头**,在 experiment run 记录里带 `lens=<effective_lens>`(LENS-PROVENANCE),使不同镜头的数据可区分、可同镜头比较。
-- **Codex 调用核对(软信号,`${CLAUDE_PLUGIN_ROOT}/scripts/verify-codex-session.mjs`)**:每轮 codex-round 返回的 `thread_id` 累积;收尾**尽量**把它们作 stdin `{threadIds:[...]}` 喂 verify-codex-session(查 `~/.codex/sessions`),把 `verified/missing` 附在 §7 供人工留意。**⚠️ 这是软信号、不是硬门禁**:实测 codex **偶发不落盘** rollout(根因未定),故 `missing` **≠ 假互审**——不挡收敛、不判不可信;`verified` 是"真调了 Codex"的证据,`missing` 仅提示"未能从 session 核实,请人工留意"。真正的强制需 hook(留作后续,见 DESIGN §12)。
+- **Codex 调用核对(软信号,`${CLAUDE_PLUGIN_ROOT}/scripts/verify-codex-session.mjs`)**:每轮 codex-round 返回的 `thread_id` 累积;收尾**尽量**把它们作 stdin `{threadIds:[...]}` 喂 verify-codex-session(查 `~/.codex/sessions`),把 `verified/missing` 附在 §7 供人工留意。**⚠️ 这是软信号、不是硬门禁**:`missing` **不挡收敛、不直接判不可信**——机制本就可绕(故不做硬门禁,见 DESIGN §12),真正的强制需 hook。但现版本 codex **落盘可靠**(早期一次 missing 系升级窗口瞬态),故 `missing` **值得人工当回事**:提示"未能从 session 核实,请人工留意";`verified` 是"真调了 Codex"的证据。
 
 每轮:
 1. `round++`。
@@ -177,7 +177,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   ```
   若最后一轮 `truncated=true`,**必须**在结论顶部加一行 `⚠️ 基于截断材料(reviewed_scope: ...),非完整签核`,避免被误读为全量通过。
   **若本次有声明侧重角度(`effective_lens` 非空,*或*你据评审指令实际侧重了某视角,见 §1 LENS-DECLARE),必须**在结论顶部加一行 `本次侧重:<角度>(额外侧重此视角;通过=全面签核,非仅该视角)`(**无显式 `--lens` 的隐性侧重也要声明**;LENS-DECLARE/LENS-SCOPE)。
-  **尽量**在结论里附:本次 codex `thread_id` + verify-codex-session 的 `verified`/`missing`(软信号供人工核)。**`missing` 不直接判不可信、不挡 RESOLVED**(codex 偶发不落盘),仅提示"未能从 session 核实,请人工留意";`verified` 则佐证真调了 Codex。
+  **尽量**在结论里附:本次 codex `thread_id` + verify-codex-session 的 `verified`/`missing`(软信号供人工核)。**`missing` 不直接判不可信、不挡 RESOLVED**(机制可绕、不做硬门禁),但现版本 codex 落盘可靠,故 `missing` 值得人工当回事——提示"未能从 session 核实,请人工留意";`verified` 则佐证真调了 Codex。
 - 未收敛(硬上限 / 停滞 / 用户打断):打印**结构化 UNRESOLVED 块**,供用户裁决。**必须既展示已达成的共识、也逐条标注未决分歧的类型与影响**,让用户能区分"地基已牢、只差几处"还是"全程在吵",并判断每条卡点要不要现在管:
   ```
   ⚠️ 未收敛(状态:UNRESOLVED · 原因:<到达 max-rounds / 停滞 / 用户打断>)

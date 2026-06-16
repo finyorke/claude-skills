@@ -4,8 +4,12 @@
 - 状态:**已实现,但实现时降级**——见下「实现修订」
 - 关联:DESIGN §12;@cc-codex-review/scripts/review-state.mjs、commands/review.md、commands/do.md
 
-> **⚠️ 实现修订(2026-06-19,自举核对后):收敛门禁 → 软信号**
-> 本 spec 原设计的 §3.2 **收敛硬门禁**(`verifiedCodexRounds < 1` 拒 RESOLVED)在自举核对中被推翻:实测 **codex 偶发不落盘 rollout**(当前版本通常落、历史记录多在,但某些后台调用没落、resume 亦报 no-rollout;排除磁盘/权限,根因未定)。硬门禁会**错杀真互审**(真调了 Codex 却因没落盘被判 verified=0、拒 RESOLVED)。故**降级为软信号**:`verify-codex-session` 仍跑、结果仍附 §7,但 **`missing` ≠ 假互审**——不挡收敛、不判不可信,仅提示人工留意;`verified` 是"真调了 Codex"的证据。`converge` 不再接受 `verifiedCodexRounds` 参数。下文 §3.2/§3.3/§4/§5 保留原设计供溯源,以本修订为准。
+> **⚠️ 实现修订(2026-06-19):收敛门禁 → 软信号**
+> 本 spec 原设计的 §3.2 **收敛硬门禁**(`verifiedCodexRounds < 1` 拒 RESOLVED)被降级为软信号。
+> - **过程**:自举核对中曾见 2 个 thread 未落盘 → 当时判"codex 偶发不落盘",担心硬门禁错杀真互审,降级软信号。
+> - **复查根因**:那 2 次正处 codex `0.135→0.139` 升级窗口(二进制替换瞬态);现版本(0.139)连续 4/4 全新调用(含全套 flag、裸 `--json`、真 codex-round 脚本)均落盘 + verify 确认——**落盘实属可靠**。
+> - **结论(仍维持软信号)**:硬门禁失败模式是"挡住真活",且机制本就可绕(Claude 可不调 verify、或塞历史真 thread_id),非真强制。`verify-codex-session` 仍跑、结果仍附 §7;**`missing` 值得人工当回事(落盘可靠下更可疑),但不挡收敛、不直接判不可信**;`verified` 是"真调了 Codex"的证据。`converge` 不接受 `verifiedCodexRounds` 参数。真硬强制需 hook(C 档)。
+> 下文 §3.2/§3.3/§4/§5 保留原设计供溯源,以本修订为准。
 
 ## 1. 问题
 `review` / `do` 是 **prompt 级软约束**——只是叮嘱 Claude 去调 Codex 互审,没有任何东西**强制或验证**。Claude 可能(图省事或上下文紧张时)**自己 review、跳过真正的 Codex 调用**,却把结论说得像互审过。这架空了工具的核心价值(两个不同 AI 互审)。
