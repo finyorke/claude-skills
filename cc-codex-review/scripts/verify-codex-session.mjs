@@ -20,7 +20,7 @@ export function verifySessions(threadIds, opts = {}) {
   } catch { files = []; }
   const verified = [], missing = [];
   for (const id of threadIds) {
-    if (isUuid(id) && files.some((f) => f.includes(id))) verified.push(id);
+    if (isUuid(id) && files.some((f) => f.endsWith(`-${id}.jsonl`))) verified.push(id); // 精确尾匹配 rollout-…-<id>.jsonl,非子串(EN1:防部分匹配/误判)
     else missing.push(id);
   }
   return { ok: true, verified, missing };

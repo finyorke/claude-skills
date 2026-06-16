@@ -52,7 +52,7 @@ Codex 给 `CHANGES` 且有实质问题 → 修 → 再复核(同样受 `--max-ro
 ## 7. 产出
 返回做完的东西 + 待用户拍板的点(若有)。**统一方案 / 关键结论的每一条都附来源**(依据了哪段代码 / 事实 / 需求,或来自谁的方案、哪轮达成),可溯源、可核对。琐碎任务直接给结果(复核结论也注明依据)。
 
-**真用 Codex 核实(防假互审)**:do 全程的 codex `thread_id`(§3 出方案 / §4 对抗 / §6 复核)累积;§4 对抗走 `review-state` 的 converge 时,先用 `${CLAUDE_PLUGIN_ROOT}/scripts/verify-codex-session.mjs` 核对(查 `~/.codex/sessions`)、把 `verified.length` 作 `verifiedCodexRounds` 传给 converge(`<1` 拒收敛)。产出**必须附** thread_id + verified/missing;`missing` 非空或一个都没核实 → 顶部标 `⚠️ 未经真实 Codex 协作核实,结论不可信`。
+**真用 Codex 核实(防假互审)**:do 全程的 codex `thread_id`(§3 出方案 / §4 对抗 / §6 复核)累积;§4 对抗走 `review-state` 的 converge 时,先用 `${CLAUDE_PLUGIN_ROOT}/scripts/verify-codex-session.mjs` 核对(查 `~/.codex/sessions`)、把 `verified.length` 作 `verifiedCodexRounds` 传给 converge(`<1` 拒收敛)。产出**必须附** thread_id + verified/missing;`missing` 非空或一个都没核实 → 顶部标 `⚠️ 未经真实 Codex 协作核实,结论不可信`。(非杜绝:塞历史真 thread_id 或不调核对仍可绕,根治需 hook。)
 
 ## 注意
 - **Codex 全程只读**(codex-round 已固定只读沙箱),绝不让它写文件;动手只由你(Claude)。

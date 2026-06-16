@@ -39,6 +39,15 @@ test('非 UUID(含路径遍历尝试)→ missing,不参与匹配', () => {
   assert.equal(r.missing.length, 2);
 });
 
+test('EN1: 仅完整尾 -<id>.jsonl 算 verified,含 id 子串的别的文件名不算', () => {
+  const home = mkdtempSync(join(tmpdir(), 'codexhome-'));
+  const d = join(home, 'sessions', '2026', '06', '19');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, `rollout-x-${UUID}-extra.jsonl`), '{}\n'); // 含 UUID 子串,但结尾不是 -<UUID>.jsonl
+  const r = verifySessions([UUID], { codexHome: home });
+  assert.deepEqual(r.missing, [UUID], '子串/部分匹配不得算 verified');
+});
+
 test('sessions 目录不存在 → 全 missing,不抛', () => {
   const r = verifySessions([UUID], { codexHome: mkdtempSync(join(tmpdir(), 'empty-')) });
   assert.deepEqual(r.missing, [UUID]);
