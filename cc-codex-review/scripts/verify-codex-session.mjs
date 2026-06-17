@@ -9,7 +9,8 @@ import { pathToFileURL } from 'node:url';
 
 const isUuid = (s) => typeof s === 'string' && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(s);
 
-// 纯函数:{ok, verified:[...], missing:[...]}。安全:非 UUID 直接 missing,绝不拿去匹配文件名(防遍历/注入)。
+// 纯函数:{ok, verified:[...], missing:[...], paths:{id:绝对路径}}。安全:非 UUID 直接 missing,绝不拿去匹配文件名(防遍历/注入)。
+// paths:对每个 verified id 给出其 rollout 文件的绝对路径,便于使用方(review/do §7)直接打开 codex 自留的完整对话记录(B)。
 export function verifySessions(threadIds, opts = {}) {
   if (!Array.isArray(threadIds)) return { ok: false, error: 'bad_input', detail: 'threadIds 须为数组' };
   const root = opts.codexHome || process.env.CODEX_HOME || join(homedir(), '.codex');
@@ -18,12 +19,14 @@ export function verifySessions(threadIds, opts = {}) {
   try {
     if (existsSync(sessionsDir)) files = readdirSync(sessionsDir, { recursive: true }).filter((f) => typeof f === 'string' && f.endsWith('.jsonl'));
   } catch { files = []; }
-  const verified = [], missing = [];
+  const verified = [], missing = [], paths = {};
   for (const id of threadIds) {
-    if (isUuid(id) && files.some((f) => f.endsWith(`-${id}.jsonl`))) verified.push(id); // 精确尾匹配 rollout-…-<id>.jsonl,非子串(EN1:防部分匹配/误判)
+    // 精确尾匹配 rollout-…-<id>.jsonl,非子串(EN1:防部分匹配/误判)
+    const hit = isUuid(id) ? files.find((f) => f.endsWith(`-${id}.jsonl`)) : undefined;
+    if (hit !== undefined) { verified.push(id); paths[id] = join(sessionsDir, hit); } // join 复原绝对路径(readdir recursive 返回相对 sessionsDir 的路径)
     else missing.push(id);
   }
-  return { ok: true, verified, missing };
+  return { ok: true, verified, missing, paths };
 }
 
 function readStdin() { return new Promise((res) => { let d = ''; process.stdin.on('data', (c) => (d += c)).on('end', () => res(d)); }); }

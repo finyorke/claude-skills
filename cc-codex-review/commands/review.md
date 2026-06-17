@@ -177,7 +177,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   ```
   若最后一轮 `truncated=true`,**必须**在结论顶部加一行 `⚠️ 基于截断材料(reviewed_scope: ...),非完整签核`,避免被误读为全量通过。
   **若本次有声明侧重角度(`effective_lens` 非空,*或*你据评审指令实际侧重了某视角,见 §1 LENS-DECLARE),必须**在结论顶部加一行 `本次侧重:<角度>(额外侧重此视角;通过=全面签核,非仅该视角)`(**无显式 `--lens` 的隐性侧重也要声明**;LENS-DECLARE/LENS-SCOPE)。
-  **尽量**在结论里附:本次 codex `thread_id` + verify-codex-session 的 `verified`/`missing`(软信号供人工核)。**`missing` 不直接判不可信、不挡 RESOLVED**(机制可绕、不做硬门禁),但现版本 codex 落盘可靠,故 `missing` 值得人工当回事——提示"未能从 session 核实,请人工留意";`verified` 则佐证真调了 Codex。
+  **尽量**在结论里附:本次 codex `thread_id` + verify-codex-session 的 `verified`/`missing`(软信号供人工核),并把 `paths` 里每个 verified id 的 **rollout 文件路径**一并列出(便于用户一键打开 codex 自留的完整对话记录)。**`missing` 不直接判不可信、不挡 RESOLVED**(机制可绕、不做硬门禁),但现版本 codex 落盘可靠,故 `missing` 值得人工当回事——提示"未能从 session 核实,请人工留意";`verified` 则佐证真调了 Codex。
 - 未收敛(硬上限 / 停滞 / 用户打断):打印**结构化 UNRESOLVED 块**,供用户裁决。**必须既展示已达成的共识、也逐条标注未决分歧的类型与影响**,让用户能区分"地基已牢、只差几处"还是"全程在吵",并判断每条卡点要不要现在管:
   ```
   ⚠️ 未收敛(状态:UNRESOLVED · 原因:<到达 max-rounds / 停滞 / 用户打断>)

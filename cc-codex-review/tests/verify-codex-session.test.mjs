@@ -27,6 +27,18 @@ test('真实存在的 thread_id → verified', () => {
   assert.deepEqual(r.missing, []);
 });
 
+test('B: verified id 在 paths 里给出 rollout 文件绝对路径', () => {
+  const home = fixtureHome(true);
+  const r = verifySessions([UUID], { codexHome: home });
+  const expected = join(home, 'sessions', '2026', '06', '19', `rollout-2026-06-19T16-58-52-${UUID}.jsonl`);
+  assert.equal(r.paths[UUID], expected);
+});
+
+test('B: missing id 不进 paths', () => {
+  const r = verifySessions(['019e0000-0000-7000-8000-000000000abc'], { codexHome: fixtureHome(true) });
+  assert.deepEqual(r.paths, {});
+});
+
 test('不存在的 thread_id → missing', () => {
   const r = verifySessions(['019e0000-0000-7000-8000-000000000abc'], { codexHome: fixtureHome(true) });
   assert.equal(r.verified.length, 0);
