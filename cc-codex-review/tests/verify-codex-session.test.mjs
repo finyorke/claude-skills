@@ -74,3 +74,40 @@ test('CLI: stdin {threadIds,codexHome} → JSON', () => {
   const out = execFileSync('node', [SCRIPT], { input: JSON.stringify({ threadIds: [UUID], codexHome: home }), encoding: 'utf8' });
   assert.deepEqual(JSON.parse(out.trim()).verified, [UUID]);
 });
+
+test('CLI: 位置参数 thread_id + --codex-home → verified(修 do 实测踩的 bug)', () => {
+  const home = fixtureHome(true);
+  const out = execFileSync('node', [SCRIPT, UUID, '--codex-home', home], { encoding: 'utf8' });
+  const r = JSON.parse(out.trim());
+  assert.deepEqual(r.verified, [UUID]);
+  assert.equal(typeof r.paths[UUID], 'string');
+});
+
+test('CLI: 既无位置参数、stdin 也空 → no_input 且 exit 2(不再静默返回空 verified)', () => {
+  assert.throws(() => execFileSync('node', [SCRIPT], { input: '', encoding: 'utf8' }), (e) => {
+    assert.equal(e.status, 2);
+    assert.equal(JSON.parse(e.stdout.trim()).error, 'no_input');
+    return true;
+  });
+});
+
+test('CLI: stdin JSON 缺 threadIds → no_input', () => {
+  assert.throws(() => execFileSync('node', [SCRIPT], { input: '{"codexHome":"/tmp"}', encoding: 'utf8' }), (e) => {
+    assert.equal(JSON.parse(e.stdout.trim()).error, 'no_input');
+    return true;
+  });
+});
+
+test('CLI: stdin 坏 JSON → bad_json', () => {
+  assert.throws(() => execFileSync('node', [SCRIPT], { input: 'not json', encoding: 'utf8' }), (e) => {
+    assert.equal(JSON.parse(e.stdout.trim()).error, 'bad_json');
+    return true;
+  });
+});
+
+test('CLI: 未知 flag → bad_arg(不静默吞成 thread_id)', () => {
+  assert.throws(() => execFileSync('node', [SCRIPT, '--nope'], { encoding: 'utf8' }), (e) => {
+    assert.equal(JSON.parse(e.stdout.trim()).error, 'bad_arg');
+    return true;
+  });
+});

@@ -30,11 +30,34 @@ export function verifySessions(threadIds, opts = {}) {
 }
 
 function readStdin() { return new Promise((res) => { let d = ''; process.stdin.on('data', (c) => (d += c)).on('end', () => res(d)); }); }
+const USAGE = 'usage: verify-codex-session.mjs <thread_id…> [--codex-home <dir>]\n   or: echo \'{"threadIds":[…],"codexHome"?}\' | verify-codex-session.mjs';
+function fail(error, detail) { process.stdout.write(JSON.stringify({ ok: false, error, detail, usage: USAGE }) + '\n'); process.exit(2); }
+
 const isMain = import.meta.url === pathToFileURL(process.argv[1] || '').href;
 if (isMain) {
-  const raw = await readStdin();
-  let inp; try { inp = raw.trim() ? JSON.parse(raw) : {}; } catch { process.stdout.write(JSON.stringify({ ok: false, error: 'bad_json' }) + '\n'); process.exit(2); }
-  const out = verifySessions(inp.threadIds || [], { codexHome: inp.codexHome });
+  // 两种入参皆可:① 位置参数 thread_id(+ 可选 --codex-home);② stdin JSON {threadIds,codexHome}。
+  // 位置参数优先;两者都没有 → 显式报错(不再静默返回空 verified——曾误导调用方/在硬门禁下假阳性卡收敛)。
+  const argv = process.argv.slice(2);
+  const posIds = []; let flagHome;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--codex-home') { flagHome = argv[++i]; }
+    else if (a === '-h' || a === '--help') { process.stdout.write(USAGE + '\n'); process.exit(0); }
+    else if (a.startsWith('--')) fail('bad_arg', `未知参数 ${a}`); // 未知 flag 显式报错,不当成 thread_id 静默吞掉
+    else posIds.push(a);
+  }
+  let threadIds, codexHome = flagHome;
+  if (posIds.length) {
+    threadIds = posIds; // 位置参数优先,不读 stdin
+  } else {
+    const raw = await readStdin();
+    if (!raw.trim()) fail('no_input', '既无位置参数 thread_id、stdin 也为空');
+    let inp; try { inp = JSON.parse(raw); } catch { fail('bad_json', 'stdin 不是合法 JSON'); }
+    if (inp.threadIds === undefined) fail('no_input', 'stdin JSON 缺 threadIds');
+    threadIds = inp.threadIds; // 非数组交由 verifySessions 判 bad_input
+    codexHome = flagHome || inp.codexHome;
+  }
+  const out = verifySessions(threadIds, { codexHome });
   process.stdout.write(JSON.stringify(out) + '\n');
   if (!out.ok) process.exit(2);
 }
