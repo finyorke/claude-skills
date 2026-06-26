@@ -345,4 +345,6 @@ LLM 循环难做单元测试,采用:
 
 - **Codex 调用核对(软信号,v0.11.0,#23)**:用户洞察——review/do 是 prompt 软约束,Claude 可能自审跳过 Codex、假装互审。利用 codex 在 `~/.codex/sessions/…/rollout-…-<thread_id>.jsonl` 留的会话记录(文件名带 thread_id):① 新增 `scripts/verify-codex-session.mjs`(查 sessions 核对 thread_id;非 UUID 直接 missing 防路径遍历);② review/do 收尾尽量调 verify-codex-session、§7 附 thread_id+verified/missing。**原拟在 `converge` 加硬门禁(`verifiedCodexRounds < 1` 拒 RESOLVED)**:自举核对中曾见 2 个 thread 未落盘 → 当时判"偶发不落盘"而降级软信号。**事后复查根因**:那 2 次正处 codex `0.135→0.139` 升级窗口(二进制替换瞬态);现版本(0.139)连续 4/4 全新调用(含真 codex-round 脚本)均落盘 + verify 确认,**落盘实属可靠**。**仍维持软信号**:硬门禁失败模式是"挡住真活",且机制本就可绕(Claude 可不调 verify、或塞历史真 thread_id 冒充——verify 只证 thread_id 历史存在、不证本次新跑),非真强制。但既然落盘可靠,§7 的 `missing` **值得人工当回事(可疑信号)**——只是不挡收敛、不直接判不可信;`verified` 是"真调了 Codex"的证据。定位是"**让调用可核对**"而非"杜绝";真硬强制需 Claude Code hook(后续 C 档,本期不做)。spec:`docs/specs/2026-06-19-codex-session-enforcement-design.md`。
 
+- **真实使用反馈(v0.11.1,kk-notify dogfood)**:首次在外部真实项目跑 `do`(规划「博主荐股面板」)暴露两点 →(a)**verify-codex-session CLI 只吃 stdin JSON**,而模型自然用**位置参数**传 thread_id → 静默返回空 verified(误导;旧硬门禁下会假阳性卡收敛)。修:CLI 兼收位置参数 + `--codex-home`/`--help`,空/缺/坏输入显式报错(no_input/bad_json/bad_arg,exit 2),不再静默吞。(b)**用户连续三次漏 `--repo`** → Codex 读不到项目、空审。修:`do`/`review` **未给 `--repo` 时默认当前目录 `.`**(显式给的优先;review 纯文本评审用 `--repo none` 退出)。
+
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。

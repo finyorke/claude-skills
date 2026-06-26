@@ -21,7 +21,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 
 ## 1. 解析参数
 从 `$ARGUMENTS` 中解析可选 flag,余下作为「评审指令」:
-- `--repo <dir>`:Codex 工作根(可读文件、跑 git);不给则纯文本/diff 评审。
+- `--repo <dir>`:Codex 工作根(可读文件、跑 git)。**未给时默认当前目录 `.`**(使 Codex 默认能读本项目),显式给了用给的;§4 评审包与 §6 调用一律带上该生效 repo。若本次是**纯文本/提案评审、不想让 Codex 接触任何 repo**,显式传 `--repo none` 关闭(回到无 repo 的纯文本/diff 评审)。dry-run 回显里 `repo=<给定值|默认 .|none>`。
 - `--diff <file|->`:一份 diff;`-` 表示从本对话里用户粘贴的 diff 块取。
 - `--plan <file>`:任务目标/规格文件。
 - `--model <m>`:传给 Codex 的模型。
@@ -52,7 +52,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 - 从本对话中收集用户最近粘贴的材料(执行结果、代码片段、计划、提案等),可多段并标注来源。
 - 若给了 `--plan <file>`,读取它;否则用对话里的目标;都没有就**问用户**目标是什么。
 - 若给了 `--diff`,读取/取出该 diff 文本。
-- 若既无任何材料、也无 `--repo`/`--diff` 可审 → **停下来问用户要评审什么**,不要猜。
+- 若没有明确的待审对象(无粘贴材料、无 `--diff`/`--plan`,评审指令也没指明要审本 repo 的哪块)→ **停下来问用户要评审什么**,不要猜(默认 `--repo .` 只是给了 Codex 读 repo 的能力,不代表知道要审什么)。
 
 ## 3. 形成你的初版主张
 基于 评审指令 + 材料 + 目标(+ repo/diff),写出:结论(通过 / 返工 / 阻止)+ 理由 + 给后续的具体修改建议。
