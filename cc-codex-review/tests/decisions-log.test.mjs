@@ -172,3 +172,42 @@ test('CLI render: 从现有 jsonl 重渲染 md', () => {
   assert.equal(r.ok, true);
   assert.match(rf(r.path, 'utf8'), /\[D1\] X/);
 });
+
+// ---- 真机 review 发现的修复(I1/I2/I3)----
+
+test('I1: set-status 翻 decided 带 rationale、清理 open 专属字段、翻完合法', () => {
+  const start = [{ id: 'D1', status: 'open', statement: 'Y', positions: { claude: 'a', codex: 'b' }, severity: 'major', source: 'do', ts: 't' }];
+  const out = applyOps(start, [{ op: 'set-status', id: 'D1', status: 'decided', rationale: '谈拢了' }]);
+  assert.equal(out[0].status, 'decided');
+  assert.equal(out[0].rationale, '谈拢了');
+  assert.equal(out[0].positions, undefined);
+  assert.equal(out[0].severity, undefined);
+  assert.equal(validate(out).ok, true);
+});
+
+test('I2: 被 supersede 的 entry 不在活跃段显示(open 谈拢后不再"假装还开着")', () => {
+  const md = renderMarkdown([
+    { id: 'D1', status: 'open', statement: '争议X', positions: { claude: 'a', codex: 'b' }, severity: 'major', source: 'do', ts: 't' },
+    { id: 'D2', status: 'decided', statement: 'X 定为 a', rationale: '谈拢', source: 'do', ts: 't', supersedes: ['D1'] },
+  ]);
+  assert.doesNotMatch(md, /\[D1\]/); // 旧 open 已被取代,不再作为独立条目出现(行尾"取代 D1"标注允许)
+  assert.match(md, /## ❌ 未决\(开放分歧\)\n（暂无）/); // 未决段为空
+  assert.match(md, /\[D2\]/);
+});
+
+test('I3: validate 查 source 与 ts', () => {
+  assert.equal(validate([{ ...okDecided, source: 'x' }]).ok, false);
+  assert.equal(validate([{ ...okDecided, ts: '' }]).ok, false);
+  assert.equal(validate([{ ...okDecided, source: undefined }]).ok, false);
+});
+
+test('I3: render 遇非法 entry(缺 source)→ 非零退出、不写 md', () => {
+  const repo = freshRepo();
+  md(pj(repo, '.cc-codex-review'), { recursive: true });
+  wf(pj(repo, '.cc-codex-review', 'decisions.jsonl'), JSON.stringify({ id: 'D1', status: 'decided', statement: 'X', rationale: 'r', ts: 't' }) + '\n');
+  assert.throws(() => execFileSync('node', [SCRIPT, 'render'], { input: JSON.stringify({ repo }), encoding: 'utf8' }), (e) => {
+    assert.equal(e.status, 2);
+    assert.equal(JSON.parse(e.stdout.trim()).error, 'invalid');
+    return true;
+  });
+});

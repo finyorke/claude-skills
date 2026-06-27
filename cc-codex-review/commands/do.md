@@ -59,7 +59,7 @@ Codex 给 `CHANGES` 且有实质问题 → 修 → 再复核(同样受 `--max-ro
 **写回决策日志(给 Codex 的跨轮基线,见 `docs/specs/2026-06-27-decision-log-design.md`)**:本轮收尾时——
 - 整理本轮 entry:**已定**(双方 AGREE 的决策/约束 → `status:decided` + `rationale`)、**未决**(仍分歧 → `status:open` + `positions.claude/codex` + `severity`)。🔶 待复核(你已回应、Codex 未确认)**先不写**,等下轮定。
 - **先让 Codex 确认记录无误**:把这些拟写入条目放进**本轮最后一个 packet**,请 Codex 确认「decided 确实达成、open 立场记对了」(不是让它对内容表态)。
-- 确认后调 `node "${CLAUDE_PLUGIN_ROOT}/scripts/decisions-log.mjs" upsert`,stdin `{"repo":"<生效repo>","ops":[...]}`:新决策/未决用 `{op:"append",entry:{...}}`;某 `open` 本轮谈拢→优先 `append` 一条新 `decided` 并 `supersedes:[旧id]`(裸 set-status 翻 decided 会因缺 rationale 被拦)。脚本会写 jsonl + 重渲染 `decisions.md`。
+- 确认后调 `node "${CLAUDE_PLUGIN_ROOT}/scripts/decisions-log.mjs" upsert`,stdin `{"repo":"<生效repo>","ops":[...]}`:新决策/未决用 `{op:"append",entry:{...}}`;某 `open` 本轮谈拢→`{op:"set-status",id:旧open_id,status:"decided",rationale:"..."}` **原地翻**(带 rationale,不堆条);某旧决策被**不同新决策**推翻→append 新 entry 带 `supersedes:[旧id]`(旧条渲染时自动隐藏)。脚本会写 jsonl + 重渲染 `decisions.md`。
 - **生效 repo 为 `none`(不适用 do,do 总有 repo)或脚本报错**:把错误如实告诉用户,不阻断主产出。
 - **不自动 `git commit`**;可提示用户"决策已记到 `.cc-codex-review/decisions.md`,需要的话自行提交"。
 

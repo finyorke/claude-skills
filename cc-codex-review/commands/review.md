@@ -142,6 +142,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 - **Codex 调用核对(软信号,`${CLAUDE_PLUGIN_ROOT}/scripts/verify-codex-session.mjs`)**:每轮 codex-round 返回的 `thread_id` 累积;收尾**尽量**把它们作 stdin `{threadIds:[...]}` 喂 verify-codex-session(查 `~/.codex/sessions`),把 `verified/missing` 附在 §7 供人工留意。**⚠️ 这是软信号、不是硬门禁**:`missing` **不挡收敛、不直接判不可信**——机制本就可绕(故不做硬门禁,见 DESIGN §12),真正的强制需 hook。但现版本 codex **落盘可靠**(早期一次 missing 系升级窗口瞬态),故 `missing` **值得人工当回事**:提示"未能从 session 核实,请人工留意";`verified` 是"真调了 Codex"的证据。
 - **写回决策日志(见 `docs/specs/2026-06-27-decision-log-design.md`)**:收尾时把本轮结论落进 `.cc-codex-review/decisions.{jsonl,md}`,供后续轮 Codex 经 `--repo` 读到——
   - **UNRESOLVED 三段映射**:✅ 已达成→`{op:"append",entry:{status:"decided",rationale,...}}`;❌ 仍未达成→`{op:"append",entry:{status:"open",positions:{claude,codex},severity,...}}`;🔶 待复核**先不写**。RESOLVED(双 AGREE)则把商定结论作 `decided` 写入。
+  - **某条之前是 `open`、本轮谈拢了**:用 `{op:"set-status",id:旧open_id,status:"decided",rationale:"..."}` **原地翻**(带 rationale,不堆条);旧决策被不同新决策推翻→append + `supersedes:[旧id]`(旧条渲染时自动隐藏)。
   - **先让 Codex 确认记录无误**(放进本轮最后一个 packet:decided 确实达成、open 立场记对了),确认后调 `node "${CLAUDE_PLUGIN_ROOT}/scripts/decisions-log.mjs" upsert`(stdin `{"repo":"<生效repo>","ops":[...]}`)。
   - **`--repo none` → 跳过写回**(纯文本评审,无 repo);脚本报错则如实告诉用户、不阻断结论。
   - **不自动 `git commit`**;可提示用户决策已记录、自行提交。

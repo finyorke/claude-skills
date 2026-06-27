@@ -43,15 +43,16 @@
 
 - **id 全局唯一、跨轮稳定**:`append` 时由脚本自动分配下一个空闲 `D<n>`(避免 Claude 撞号);`set-status`/`upsert` 按已存在 id 引用。
 - **状态语义**:`decided` = 当轮双方 AGREE 且 Codex 确认;`open` = 仍未谈拢(到顶/停滞/被打断),带双方立场 + 严重度。
-- **可演进**:某 `open` 在后续轮谈拢 → `set-status` 翻成 `decided`(不堆重复条)。决策被推翻 → 新 entry 用 `supersedes` 指向旧 id。
+- **可演进**:某 `open` 在后续轮谈拢 → `set-status` 翻成 `decided` **并带上 `rationale`**(`{op:"set-status",id,status:"decided",rationale}`;原地翻、不堆条、自动清掉 open 专属字段 positions/severity)。决策被**不同的新决策**推翻 → append 新 entry 用 `supersedes` 指向旧 id。**被 supersede 的条目渲染时从活跃两段隐藏**(只留 jsonl 历史),不再污染 Codex 的基线(I2)。
 
 ### 3.3 脚本 `scripts/decisions-log.mjs`(纯函数 + 薄 CLI + 单测,沿用现有风格)
 
 - **纯函数(无 IO,可测)**:
   - `applyOps(entries, ops)`:施加 append(自动分配 id)/ set-status / supersede,返回新 entries。
-  - `validate(entries)`:id 唯一、`status` 枚举、按状态必填(decided 需 rationale;open 需 positions+severity)、`supersedes` 不悬空(指向存在的 id)。
+  - `validate(entries)`:id 唯一、`status` 枚举、`source` 枚举(do|review)、`ts` 非空、`statement` 非空、按状态必填(decided 需 rationale;open 需 positions+severity)、`supersedes` 不悬空(指向存在的 id)。
+  - `renderMarkdown(entries)`:渲染前**剔除被任何条目 supersede 的 id**,只渲染活跃条目(I2)。
   - `renderMarkdown(entries)`:渲染 `decisions.md`(分「✅ 已定」「❌ 未决」两段)。
-- **CLI(负责 IO,读写上述两文件)**:`read`(返回当前 entries,供 Claude 载入基线)、`upsert`(应用 ops + 写 jsonl + 重渲染 md)、`render`、`validate`。**实现修订**:`set-status` 不做独立子命令,而作为 `upsert` 的一种 op(`{op:"set-status",id,status}`)——单一写入口=单次校验 + 原子写,优于多入口。stdin JSON → stdout JSON,与其它脚本一致;坏输入(损坏 jsonl、撞号、缺字段)**显式报错并非零退出**,不带病写。
+- **CLI(负责 IO,读写上述两文件)**:`read`(返回当前 entries,供 Claude 载入基线)、`upsert`(应用 ops + 校验 + 写 jsonl + 重渲染 md)、`render`(**先校验再渲染**,坏 jsonl 不渲成垃圾 md,I3)、`validate`。**实现修订**:`set-status` 不做独立子命令,而作为 `upsert` 的一种 op(`{op:"set-status",id,status,rationale?,positions?,severity?}`,可随状态翻转补字段)——单一写入口=单次校验 + 原子写,优于多入口。stdin JSON → stdout JSON,与其它脚本一致;坏输入(损坏 jsonl、撞号、缺字段)**显式报错并非零退出**,不带病写。
 
 ### 3.4 渲染格式(decisions.md,Codex 读这个)
 

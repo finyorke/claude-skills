@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 const STATUSES = new Set(['decided', 'open']);
 const SEV = new Set(['blocker', 'major', 'minor']);
+const SOURCES = new Set(['do', 'review']);
 
 // 取下一个空闲 id（D<max+1>）。
 export function nextId(entries) {
@@ -19,7 +20,7 @@ export function nextId(entries) {
 }
 
 // ops: [{op:'append', ts, entry:{status,statement,rationale?,positions?,severity?,source,supersedes?}}]
-//    | [{op:'set-status', id, status}]
+//    | [{op:'set-status', id, status, rationale?, positions?, severity?}]  // 原地演进(如 open 谈拢→decided,带 rationale)
 // 纯函数:不改入参,返回新数组。
 export function applyOps(entries, ops) {
   const out = entries.map((e) => ({ ...e }));
@@ -31,6 +32,10 @@ export function applyOps(entries, ops) {
       const e = out.find((x) => x.id === op.id);
       if (!e) throw new Error(`set-status: 未知 id ${op.id}`);
       e.status = op.status;
+      // 原地演进:可随状态翻转一并补字段(I1——open 谈拢→decided 须带 rationale,否则 validate 拦)。
+      for (const k of ['rationale', 'positions', 'severity']) if (op[k] !== undefined) e[k] = op[k];
+      // 翻成 decided 后,open 专属字段(positions/severity)不再适用,清掉保持 entry 干净。
+      if (op.status === 'decided') { delete e.positions; delete e.severity; }
     } else {
       throw new Error(`未知 op ${op.op}`);
     }
@@ -48,6 +53,8 @@ export function validate(entries) {
     if (seen.has(e.id)) errors.push(`重复 id: ${e.id}`);
     seen.add(e.id);
     if (!STATUSES.has(e.status)) errors.push(`${e.id}: 坏 status ${e.status}`);
+    if (!SOURCES.has(e.source)) errors.push(`${e.id}: 坏 source ${JSON.stringify(e.source)}`);
+    if (!e.ts || typeof e.ts !== 'string') errors.push(`${e.id}: ts 缺失`);
     if (!e.statement || typeof e.statement !== 'string') errors.push(`${e.id}: statement 缺失`);
     if (e.status === 'decided' && !e.rationale) errors.push(`${e.id}: decided 需 rationale`);
     if (e.status === 'open') {
@@ -60,9 +67,12 @@ export function validate(entries) {
 }
 
 // 从 entries 渲染 decisions.md(Codex 实际读这个)。
+// 被其它 entry supersede 的条目从活跃两段隐藏(I2:旧 open/decided 谈拢/推翻后不该再出现在基线里;历史仍在 jsonl)。
 export function renderMarkdown(entries) {
-  const decided = entries.filter((e) => e.status === 'decided');
-  const open = entries.filter((e) => e.status === 'open');
+  const superseded = new Set(entries.flatMap((e) => (Array.isArray(e.supersedes) ? e.supersedes : [])));
+  const active = entries.filter((e) => !superseded.has(e.id));
+  const decided = active.filter((e) => e.status === 'decided');
+  const open = active.filter((e) => e.status === 'open');
   const L = [];
   L.push('# 决策日志(cc-codex-review · 自动维护)');
   L.push('> 每轮 do/review 收敛后追加。DECIDED=双方已确认的基线;OPEN=仍未谈拢。供 Codex 跨轮读取。');
@@ -110,6 +120,8 @@ if (isMain) {
   if (cmd === 'read') {
     emit({ ok: true, entries });
   } else if (cmd === 'render') {
+    const v = validate(entries); // I3:render 也先校验,坏 jsonl 不渲成垃圾 md
+    if (!v.ok) { emit({ ok: false, error: 'invalid', errors: v.errors }); process.exit(2); }
     mkdirSync(p.dir, { recursive: true });
     writeFileSync(p.md, renderMarkdown(entries));
     emit({ ok: true, path: p.md });
