@@ -367,12 +367,14 @@ test('CLI upsert: append 后 jsonl+md 落盘、read 往返一致', () => {
   assert.match(mdTxt, /\[D1\] X/);
 });
 
-test('CLI upsert: set-status 翻转 open→decided', () => {
+test('CLI upsert: 裸 set-status 把 open 翻 decided 缺 rationale → 校验拦下(非零退出)', () => {
   const repo = freshRepo();
   cli('upsert', { repo, ops: [{ op: 'append', entry: { status: 'open', statement: 'Y', positions: { claude: 'a', codex: 'b' }, severity: 'major', source: 'do' } }] });
-  const r = cli('upsert', { repo, ops: [{ op: 'set-status', id: 'D1', status: 'decided' }, { op: 'append', entry: { status: 'decided', statement: 'note', rationale: 'r', source: 'do' } }] });
-  // 翻成 decided 后缺 rationale 应被 validate 拦下吗?——open→decided 需补 rationale:见 Step 3 约定
-  assert.equal(r.ok, false); // 缺 rationale
+  assert.throws(() => execFileSync('node', [SCRIPT, 'upsert'], { input: JSON.stringify({ repo, ops: [{ op: 'set-status', id: 'D1', status: 'decided' }] }), encoding: 'utf8' }), (e) => {
+    assert.equal(e.status, 2);
+    assert.equal(JSON.parse(e.stdout.trim()).error, 'invalid');
+    return true;
+  });
 });
 
 test('CLI upsert: 校验失败 → 非零退出且不写', () => {

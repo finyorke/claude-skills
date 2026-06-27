@@ -81,3 +81,51 @@ export function renderMarkdown(entries) {
   L.push('');
   return L.join('\n');
 }
+
+// ---- CLI(IO 层)----
+function readStdin() { return new Promise((res) => { let d = ''; process.stdin.on('data', (c) => (d += c)).on('end', () => res(d)); }); }
+function paths(repo) { const dir = join(repo || '.', '.cc-codex-review'); return { dir, jsonl: join(dir, 'decisions.jsonl'), md: join(dir, 'decisions.md') }; }
+function loadEntries(jsonl) {
+  if (!existsSync(jsonl)) return [];
+  const out = [];
+  for (const line of readFileSync(jsonl, 'utf8').split('\n')) {
+    const t = line.trim(); if (!t) continue;
+    let o; try { o = JSON.parse(t); } catch { throw new Error('corrupt_jsonl'); }
+    out.push(o);
+  }
+  return out;
+}
+function emit(o) { process.stdout.write(JSON.stringify(o) + '\n'); }
+function fail(error, detail) { emit({ ok: false, error, detail }); process.exit(2); }
+
+const isMain = import.meta.url === pathToFileURL(process.argv[1] || '').href;
+if (isMain) {
+  const cmd = process.argv[2];
+  const raw = await readStdin();
+  let inp; try { inp = raw.trim() ? JSON.parse(raw) : {}; } catch { fail('bad_json', 'stdin 非合法 JSON'); }
+  const p = paths(inp.repo);
+  let entries;
+  try { entries = loadEntries(p.jsonl); } catch (e) { fail('corrupt_jsonl', String(e.message)); }
+  if (cmd === 'read') {
+    emit({ ok: true, entries });
+  } else if (cmd === 'render') {
+    mkdirSync(p.dir, { recursive: true });
+    writeFileSync(p.md, renderMarkdown(entries));
+    emit({ ok: true, path: p.md });
+  } else if (cmd === 'validate') {
+    const v = validate(entries);
+    emit(v); if (!v.ok) process.exit(2);
+  } else if (cmd === 'upsert') {
+    const ops = (inp.ops || []).map((o) => (o.op === 'append' ? { ...o, ts: o.ts || new Date().toISOString() } : o));
+    let next;
+    try { next = applyOps(entries, ops); } catch (e) { fail('bad_op', String(e.message)); }
+    const v = validate(next);
+    if (!v.ok) { emit({ ok: false, error: 'invalid', errors: v.errors }); process.exit(2); }
+    mkdirSync(p.dir, { recursive: true });
+    writeFileSync(p.jsonl, next.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    writeFileSync(p.md, renderMarkdown(next));
+    emit({ ok: true, entries: next });
+  } else {
+    fail('bad_cmd', `未知子命令 ${cmd}`);
+  }
+}
