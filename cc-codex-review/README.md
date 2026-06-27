@@ -83,6 +83,7 @@
 - 关键逻辑都是**确定性脚本 + 单测**(`node --test cc-codex-review/tests/*.test.mjs`,当前 147 绿):防假收敛、防漏算。
 - 整套工具**被它自己审过**(dogfood)。
 - **Codex 调用可核对(软信号)**:`review`/`do` 的结论会附 codex `thread_id`,可在 `~/.codex/sessions` 核对"真的调了 Codex"(`verify-codex-session.mjs`)。这是**软信号**(不挡结论、不做硬门禁——机制可绕,根治需 hook):但现版本 codex **落盘可靠**,故 `missing` 值得人工当回事、提示留意;`verified` 佐证真调了 Codex。
+- **决策日志(跨轮上下文)**:`do`/`review` 把过程定下的决策/约束记到被操作项目的 `.cc-codex-review/decisions.md`,连续多轮时让 Codex 经 `--repo` 读到稳定基线(`decisions-log.mjs`)。
 
 ## 更多
 设计、路线图与决策见 **`DESIGN.md`**(尤其 §12);需求提取的设计 spec 见 `docs/specs/2026-06-12-extract-reqs-design.md`。

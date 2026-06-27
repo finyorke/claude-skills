@@ -347,4 +347,6 @@ LLM 循环难做单元测试,采用:
 
 - **真实使用反馈(v0.11.1,kk-notify dogfood)**:首次在外部真实项目跑 `do`(规划「博主荐股面板」)暴露两点 →(a)**verify-codex-session CLI 只吃 stdin JSON**,而模型自然用**位置参数**传 thread_id → 静默返回空 verified(误导;旧硬门禁下会假阳性卡收敛)。修:CLI 兼收位置参数 + `--codex-home`/`--help`,空/缺/坏输入显式报错(no_input/bad_json/bad_arg,exit 2),不再静默吞。(b)**用户连续三次漏 `--repo`** → Codex 读不到项目、空审。修:`do`/`review` **未给 `--repo` 时默认当前目录 `.`**(显式给的优先;review 纯文本评审用 `--repo none` 退出)。
 
+- **决策日志(decisions-log,v0.12.0)**:连续多轮 do/review 时 **Codex 跨轮丢上下文**(独立进程、每轮只见 packet+`--repo`、跨命令零记忆)。把过程定下的**决策/约束(软知识)**落盘到被操作项目的 `.cc-codex-review/decisions.{jsonl,md}`,经 `--repo` 每轮带给 Codex。新增 `scripts/decisions-log.mjs`(纯函数 `nextId`/`applyOps`/`validate`/`renderMarkdown` + CLI `read`/`upsert`/`render`/`validate`,纯函数无 IO、CLI 管文件)。entry 带 `decided/open` 状态、可 `supersedes` 演进;收尾经 Codex 确认「记录无误」再写。**非 Claude 记忆补丁**(Claude 上下文由 Claude Code 原生维护、短期无损;仅长会话 compaction 退化)——是给 **Codex** 的稳定基线。诚实边界:日志仍 Claude 写,靠 Codex 确认 + 用户审 + git diff 取信,收尾写入是 prompt 级软约束。spec/plan:`docs/specs|plans/2026-06-27-decision-log*.md`。
+
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。
