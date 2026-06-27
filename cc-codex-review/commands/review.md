@@ -53,6 +53,8 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 - 若给了 `--plan <file>`,读取它;否则用对话里的目标;都没有就**问用户**目标是什么。
 - 若给了 `--diff`,读取/取出该 diff 文本。
 - 若没有明确的待审对象(无粘贴材料、无 `--diff`/`--plan`,评审指令也没指明要审本 repo 的哪块)→ **停下来问用户要评审什么**,不要猜(默认 `--repo .` 只是给了 Codex 读 repo 的能力,不代表知道要审什么)。
+- **载入决策日志基线**:若生效 repo 非 `none`,调
+  `node "${CLAUDE_PLUGIN_ROOT}/scripts/decisions-log.mjs" read`(stdin `{"repo":"<生效repo>"}`)读已有决策/未决项作为本轮已知基线(Codex 经 `--repo` 读到 `.cc-codex-review/decisions.md`)。`--repo none`→跳过。文件不存在=空基线。
 
 ## 3. 形成你的初版主张
 基于 评审指令 + 材料 + 目标(+ repo/diff),写出:结论(通过 / 返工 / 阻止)+ 理由 + 给后续的具体修改建议。
@@ -138,6 +140,11 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   - **每次 CLI 调用都须显式传 state(防漏传清空历史→假收敛,RS-P2-013-R1)**:`reduce`/`validate-round` 必须带 `prevState.points`(**第 1 轮显式传 `{"round":0,"points":[]}`**,不可省略);`converge` 必须带 `state.points` 且 `claudeAgree` 为严格布尔。脚本对缺省/坏输入返回 `{ok:false,error:...}` 而非默认放行。
 - **每轮记 P1 度量(`${CLAUDE_PLUGIN_ROOT}/scripts/metrics.mjs`)**:reduce 之后调 `round-metrics`(传 `prevState` + 本轮 `round`〔含你给的语义标签 `revision_induced`/`stuck`〕+ codex-round 输出的 `wall_clock_ms` 与 `attempts`)得本轮记录;循环结束 `aggregate` 汇总(含 `retried_rounds`=发生过重试的轮数)。**汇总时传 `expectedRounds`=本次循环已开始(`round++` 到达)的轮数**:若某轮因 `bad_verdict`/`codex_unavailable` 中断而没产出度量记录,`records.length < expectedRounds` → `complete:false` 且 `total_wall_clock_ms`/`retried_rounds` 归 null,**不拿残缺记录伪装完整成本**(修 MET-ERR-001)。`new/repeat` 由 id 是否在 prevState 出现**确定性判定**;`revision_induced`(⊆new:因上轮修订才出现)/`stuck`(⊆repeat:连续≥2 轮实质未变)由你据实标注。用于"轮次耗在新发现 vs 确认 vs 反复"的数据化复盘(跨 ≥3 个真实任务用 `aggregate-tasks`,各任务 `expectedRounds` 对齐传入)。**若套了镜头**,在 experiment run 记录里带 `lens=<effective_lens>`(LENS-PROVENANCE),使不同镜头的数据可区分、可同镜头比较。
 - **Codex 调用核对(软信号,`${CLAUDE_PLUGIN_ROOT}/scripts/verify-codex-session.mjs`)**:每轮 codex-round 返回的 `thread_id` 累积;收尾**尽量**把它们作 stdin `{threadIds:[...]}` 喂 verify-codex-session(查 `~/.codex/sessions`),把 `verified/missing` 附在 §7 供人工留意。**⚠️ 这是软信号、不是硬门禁**:`missing` **不挡收敛、不直接判不可信**——机制本就可绕(故不做硬门禁,见 DESIGN §12),真正的强制需 hook。但现版本 codex **落盘可靠**(早期一次 missing 系升级窗口瞬态),故 `missing` **值得人工当回事**:提示"未能从 session 核实,请人工留意";`verified` 是"真调了 Codex"的证据。
+- **写回决策日志(见 `docs/specs/2026-06-27-decision-log-design.md`)**:收尾时把本轮结论落进 `.cc-codex-review/decisions.{jsonl,md}`,供后续轮 Codex 经 `--repo` 读到——
+  - **UNRESOLVED 三段映射**:✅ 已达成→`{op:"append",entry:{status:"decided",rationale,...}}`;❌ 仍未达成→`{op:"append",entry:{status:"open",positions:{claude,codex},severity,...}}`;🔶 待复核**先不写**。RESOLVED(双 AGREE)则把商定结论作 `decided` 写入。
+  - **先让 Codex 确认记录无误**(放进本轮最后一个 packet:decided 确实达成、open 立场记对了),确认后调 `node "${CLAUDE_PLUGIN_ROOT}/scripts/decisions-log.mjs" upsert`(stdin `{"repo":"<生效repo>","ops":[...]}`)。
+  - **`--repo none` → 跳过写回**(纯文本评审,无 repo);脚本报错则如实告诉用户、不阻断结论。
+  - **不自动 `git commit`**;可提示用户决策已记录、自行提交。
 
 每轮:
 1. `round++`。
