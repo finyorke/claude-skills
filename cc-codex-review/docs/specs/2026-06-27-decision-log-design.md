@@ -51,7 +51,7 @@
   - `applyOps(entries, ops)`:施加 append(自动分配 id)/ set-status / supersede,返回新 entries。
   - `validate(entries)`:id 唯一、`status` 枚举、按状态必填(decided 需 rationale;open 需 positions+severity)、`supersedes` 不悬空(指向存在的 id)。
   - `renderMarkdown(entries)`:渲染 `decisions.md`(分「✅ 已定」「❌ 未决」两段)。
-- **CLI(负责 IO,读写上述两文件)**:`read`(返回当前 entries,供 Claude 载入基线)、`upsert`(应用 ops + 写 jsonl + 重渲染 md)、`set-status`、`render`、`validate`。stdin JSON → stdout JSON,与其它脚本一致;坏输入(损坏 jsonl、撞号、缺字段)**显式报错并非零退出**,不带病写。
+- **CLI(负责 IO,读写上述两文件)**:`read`(返回当前 entries,供 Claude 载入基线)、`upsert`(应用 ops + 写 jsonl + 重渲染 md)、`render`、`validate`。**实现修订**:`set-status` 不做独立子命令,而作为 `upsert` 的一种 op(`{op:"set-status",id,status}`)——单一写入口=单次校验 + 原子写,优于多入口。stdin JSON → stdout JSON,与其它脚本一致;坏输入(损坏 jsonl、撞号、缺字段)**显式报错并非零退出**,不带病写。
 
 ### 3.4 渲染格式(decisions.md,Codex 读这个)
 

@@ -28,6 +28,11 @@ test('applyOps append: 自动分配 id、保留字段、ts 取自 op', () => {
   assert.equal(out[0].ts, '2026-06-27T00:00:00Z');
 });
 
+test('applyOps append: 忽略 caller 传入的 entry.id,强制自动 id(防撞号绕过)', () => {
+  const out = applyOps([{ id: 'D1', status: 'decided', statement: 'a', rationale: 'r' }], [{ op: 'append', ts: 't', entry: { id: 'D99', status: 'decided', statement: 'X', rationale: 'why', source: 'do' } }]);
+  assert.equal(out[1].id, 'D2'); // 自动分配,非 caller 的 D99
+});
+
 test('applyOps set-status: 翻转已存在条目', () => {
   const start = [{ id: 'D1', status: 'open', statement: 'X', source: 'do', ts: 't' }];
   const out = applyOps(start, [{ op: 'set-status', id: 'D1', status: 'decided' }]);

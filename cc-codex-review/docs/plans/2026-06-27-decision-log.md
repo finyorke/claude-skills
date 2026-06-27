@@ -109,7 +109,8 @@ export function applyOps(entries, ops) {
   const out = entries.map((e) => ({ ...e }));
   for (const op of ops || []) {
     if (op.op === 'append') {
-      out.push({ id: nextId(out), ...op.entry, ts: op.ts });
+      // id/ts 放展开之后:始终用脚本自动分配的 id,忽略 caller 传入的 entry.id(守"自动分配防撞号"不变量)。
+      out.push({ ...op.entry, id: nextId(out), ts: op.ts });
     } else if (op.op === 'set-status') {
       const e = out.find((x) => x.id === op.id);
       if (!e) throw new Error(`set-status: 未知 id ${op.id}`);
