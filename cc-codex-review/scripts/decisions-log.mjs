@@ -36,3 +36,24 @@ export function applyOps(entries, ops) {
   }
   return out;
 }
+
+// 校验整组 entries 的结构不变量;返回 {ok:true} 或 {ok:false, errors:[...]}。
+export function validate(entries) {
+  const errors = [];
+  const ids = new Set(entries.map((e) => e && e.id));
+  const seen = new Set();
+  for (const e of entries) {
+    if (!e || typeof e.id !== 'string' || !/^D\d+$/.test(e.id)) { errors.push(`坏 id: ${JSON.stringify(e && e.id)}`); continue; }
+    if (seen.has(e.id)) errors.push(`重复 id: ${e.id}`);
+    seen.add(e.id);
+    if (!STATUSES.has(e.status)) errors.push(`${e.id}: 坏 status ${e.status}`);
+    if (!e.statement || typeof e.statement !== 'string') errors.push(`${e.id}: statement 缺失`);
+    if (e.status === 'decided' && !e.rationale) errors.push(`${e.id}: decided 需 rationale`);
+    if (e.status === 'open') {
+      if (!e.positions || !e.positions.claude || !e.positions.codex) errors.push(`${e.id}: open 需 positions.claude/codex`);
+      if (!SEV.has(e.severity)) errors.push(`${e.id}: open 需合法 severity`);
+    }
+    if (Array.isArray(e.supersedes)) for (const s of e.supersedes) if (!ids.has(s)) errors.push(`${e.id}: supersedes 悬空 ${s}`);
+  }
+  return errors.length ? { ok: false, errors } : { ok: true };
+}
