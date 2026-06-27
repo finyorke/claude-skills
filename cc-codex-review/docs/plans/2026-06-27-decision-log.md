@@ -259,14 +259,14 @@ test('renderMarkdown: 两段、字段齐全', () => {
   const md = renderMarkdown([okDecided, okOpen]);
   assert.match(md, /## ✅ 已定决策\/约束/);
   assert.match(md, /\[D1\] X — 理由:why  \(do · t\)/);
-  assert.match(md, /## ❌ 未决(开放分歧)/);
+  assert.match(md, /## ❌ 未决\(开放分歧\)/);
   assert.match(md, /\[D2\] Y · 严重度:major · Claude:a \/ Codex:b/);
 });
 
 test('renderMarkdown: 空 → 两段都给占位', () => {
   const md = renderMarkdown([]);
   assert.match(md, /## ✅ 已定决策\/约束\n（暂无）/);
-  assert.match(md, /## ❌ 未决(开放分歧)\n（暂无）/);
+  assert.match(md, /## ❌ 未决\(开放分歧\)\n（暂无）/);
 });
 
 test('renderMarkdown: decided 带 supersedes 时标注', () => {
