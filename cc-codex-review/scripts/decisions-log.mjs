@@ -57,3 +57,27 @@ export function validate(entries) {
   }
   return errors.length ? { ok: false, errors } : { ok: true };
 }
+
+// 从 entries 渲染 decisions.md(Codex 实际读这个)。
+export function renderMarkdown(entries) {
+  const decided = entries.filter((e) => e.status === 'decided');
+  const open = entries.filter((e) => e.status === 'open');
+  const L = [];
+  L.push('# 决策日志(cc-codex-review · 自动维护)');
+  L.push('> 每轮 do/review 收敛后追加。DECIDED=双方已确认的基线;OPEN=仍未谈拢。供 Codex 跨轮读取。');
+  L.push('');
+  L.push('## ✅ 已定决策/约束');
+  if (decided.length === 0) L.push('（暂无）');
+  for (const e of decided) {
+    const sup = Array.isArray(e.supersedes) && e.supersedes.length ? ` · 取代 ${e.supersedes.join(',')}` : '';
+    L.push(`- [${e.id}] ${e.statement} — 理由:${e.rationale}  (${e.source} · ${e.ts})${sup}`);
+  }
+  L.push('');
+  L.push('## ❌ 未决(开放分歧)');
+  if (open.length === 0) L.push('（暂无）');
+  for (const e of open) {
+    L.push(`- [${e.id}] ${e.statement} · 严重度:${e.severity} · Claude:${e.positions.claude} / Codex:${e.positions.codex}  (${e.source} · ${e.ts})`);
+  }
+  L.push('');
+  return L.join('\n');
+}
