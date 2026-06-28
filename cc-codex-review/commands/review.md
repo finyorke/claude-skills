@@ -82,7 +82,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 优先质疑(按本次评审模式选取,见顶部「适用模式与边界」):实现路径、设计取舍、假设是否成立、需求是否完整覆盖、有无潜藏 bug、边界用例、论点/证据是否充分。
 按提供的 JSON Schema 输出全部字段:verdict / remaining_issues / candidate_dispositions / rationale / truncated / reviewed_scope / assumptions。
 - `remaining_issues[].id`:每条 issue 一个**稳定短 id**(如 `I1`/`I2`)。**新** issue 自取一个本次评审内唯一的 id;若是续审/重提**增量里已带 id 的点**(见下),**复用原 id**,不要换新。
-- `candidate_dispositions`:针对**增量里 Claude 列出的每个 candidate(按其 id)**给出裁定 `{id, disposition}`,`disposition ∈ {confirmed(认可该修订、不再质疑), rejected(仍不接受)}`。**首轮无 candidate 时输出空数组 `[]`**;不得引用未在增量中出现的 id;每个被列出的 candidate 都要给一条(不可遗漏)。`rejected` 的点应同时在 `remaining_issues` 里(用同一 id)给出仍存在的理由。
+- `candidate_dispositions`:针对**增量里 Claude 列出的每个 candidate(按其 id)**给出裁定 `{id, disposition}`,`disposition ∈ {confirmed(认可该修订、不再质疑), rejected(仍不接受)}`。**首轮无 candidate 时输出空数组 `[]`**;不得引用未在增量中出现的 id;每个被列出的 candidate 都要给一条(不可遗漏)。`rejected` 的点应同时在 `remaining_issues` 里(用同一 id)给出仍存在的理由;**反之,`confirmed` 的点表示已了结、不要再列进 `remaining_issues`**(`remaining_issues` 只放仍然成立/未解决的问题——把已 confirmed 的点又放进去会与"确认"自相矛盾、被记账校验判为冲突)。`remaining_issues` 不是"本轮处理过的所有点"的回执清单,只是"仍未解决"的清单。
 - `truncated`:若你只看到了材料/改动的一部分(被摘要、截断、或仅 diff 片段),置 true。
 - `reviewed_scope`:一句话说明你实际审了什么范围(如「仅 packet 内摘要,未读全量 diff」)。
 - `assumptions`:你为得出结论而做的假设(如「假设测试通过」)。
