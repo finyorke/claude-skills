@@ -107,6 +107,13 @@ test('loadRounds 修I2: sha256 缺失/坏格式 → 抛(必填,不可选)', () =
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('loadRounds 修I1(整体复核): codex_out 非普通文件(目录)→ 抛(拒读 FIFO/特殊文件防阻塞)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'audit-'));
+  try {
+    assert.throws(() => loadRounds({ rounds: [{ round_index: 1, codex_out: dir, codex_out_sha256: 'a'.repeat(64) }] }), /不是普通文件/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('loadRounds 修I3: round_index 不连续/缺失 → 抛(防 manifest 内部抽轮/乱序)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'audit-'));
   try {

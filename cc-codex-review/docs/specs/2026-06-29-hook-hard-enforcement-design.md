@@ -48,7 +48,7 @@ review 收敛 → 写 audit manifest 到临时文件 → §7 打印哨兵 <<CCR-
   - `audited_converged===true` → exit 0 放行。
   - 否则(not converged / loadRounds 抛 evidence_invalid / manifest 读不到/坏 JSON)→ **exit 2 + stdout `{"decision":"block","reason":"<detail>"}`** 强制不让停,提示"独立重审未通过,请修正后重跑或改结论为 UNRESOLVED 并撤下哨兵"。
 - **基础设施失败 fail-open**:hook 脚本自身异常(读 transcript 失败、import 失败)→ exit 0(不 block)。**判据:能跑出审计结论才 block;跑不起来不 block**——避免全局 hook 把用户整个 Claude Code 卡死。
-- 性能:无哨兵即返回,只做一次 transcript 读 + 一次 grep,开销极小。
+- **有界/安全 IO(修整体复核 I1)**:transcript **尾读**(只读末尾 512KB,不随会话线性增长)、manifest/每个 raw `codex_out` 读前 `lstat` 须**普通文件** + **大小上限**(manifest 1MB、raw 4MB),**绝不在 FIFO/目录/特殊文件上阻塞、不被超大文件 OOM**。transcript 非普通文件 → infra fail-open;manifest/raw 非普通/超限 → 证据无效 block。
 
 ### 3.4 hooks/hooks.json
 ```json

@@ -138,3 +138,50 @@ test('infra fail-open:stdin 非 JSON → 放行 exit 0', () => {
   try { execFileSync('node', [HOOK], { input: '{bad', encoding: 'utf8' }); }
   catch (e) { assert.fail('不应非零退出:' + e.status); }
 });
+
+// ---- 修 I1:有界/安全 IO ----
+test('修I1: transcript 是非普通文件(目录)→ infra fail-open 放行(不阻塞)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hook-'));
+  try { assert.equal(runHook({ transcript_path: dir }).code, 0); } // 目录非普通文件 → readTail 抛 → 放行
+  finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('修I1: 超大 transcript(>尾读上限)+ 末行哨兵 + 通过 manifest → 仍检出并放行(尾读有效)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hook-'));
+  try {
+    const mf = writeManifest(dir, convergedRounds(dir));
+    const junk = []; for (let i = 0; i < 12000; i++) junk.push('无关回合填充内容'.repeat(8) + i); // ~ >512KB
+    const tp = writeTranscript(dir, [...junk, concl(mf)]);
+    assert.equal(runHook({ transcript_path: tp }).code, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('修round2漏洞: 单条超大 assistant 记录(>尾窗)末尾带哨兵 → 截断检出→保守 block(不静默放行)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hook-'));
+  try {
+    const mf = writeManifest(dir, convergedRounds(dir));
+    const huge = '超长结论填充'.repeat(60000); // 单条 ~ >512KB
+    const tp = writeTranscript(dir, [`${huge}\n<<CCR-RESOLVED manifest="${mf}">>`]); // 整条是一行 JSON,远超尾窗
+    const r = runHook({ transcript_path: tp });
+    assert.equal(r.code, 2, '超大且含哨兵的截断最终记录应保守 block,不能静默放行');
+    assert.match(JSON.parse(r.stdout.trim()).reason, /最终消息过大|截断/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('修round2漏洞: 单条超大 assistant 记录但无哨兵 → 放行(不误伤超大无哨兵消息)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hook-'));
+  try {
+    const huge = '超长无关内容填充'.repeat(60000);
+    const tp = writeTranscript(dir, [huge]);
+    assert.equal(runHook({ transcript_path: tp }).code, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('修I1: 哨兵 + manifest 是非普通文件(目录)→ block(证据无效,不阻塞)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hook-'));
+  try {
+    const r = runHook({ transcript_path: writeTranscript(dir, [concl(dir)]) }); // manifest 路径指向目录
+    assert.equal(r.code, 2);
+    assert.match(JSON.parse(r.stdout.trim()).reason, /普通文件|读不到|解析不了/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

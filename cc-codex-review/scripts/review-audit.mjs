@@ -12,9 +12,20 @@
 // 不改 review-state 的纯函数/无 IO 不变量;本器**导入并重放**它,文件 IO 只在 CLI 层。
 import { reduce, validateRound, validateState, canConverge, emptyState, counts } from './review-state.mjs';
 import { isValidVerdict } from './verdict-shape.mjs';
-import { readFileSync } from 'node:fs';
+import { readFileSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+
+// 有界、安全地读取证据文件(修 I1:全局 hook 会调到这里,绝不能在 FIFO/特殊文件上阻塞、或被超大文件 OOM)。
+// 须是**普通文件**(lstat isFile,挡 FIFO/目录/符号链接特殊项)且**不超上限**;否则抛(→ 上层当证据无效 fail-closed)。
+const RAW_CAP = 4 * 1024 * 1024; // 单个 codex_out raw 文件上限
+export function readBoundedFile(path, cap, label) {
+  let st;
+  try { st = lstatSync(path); } catch (e) { throw new Error(`${label} 读不到(${path}):${e.message}`); }
+  if (!st.isFile()) throw new Error(`${label} 不是普通文件(${path};拒读 FIFO/目录/特殊文件,防阻塞)`);
+  if (st.size > cap) throw new Error(`${label} 超过大小上限 ${cap} 字节(${path}:${st.size})`);
+  return readFileSync(path);
+}
 
 // 纯核心:rounds=[{ codexOutput:{verdict,remaining_issues,candidate_dispositions,...}, claudeActions:{adopted,rebutted,merges,annotations} }]
 //   - Codex 字段**只取自 codexOutput**(=raw --out 文件解析),忽略任何 Claude 转述的 Codex 字段;
@@ -80,7 +91,7 @@ export function loadRounds(manifest) {
     // 修 I2:sha256 必填(不可选)——否则缺哈希即退化成只信路径,防篡改/串文件形同虚设。
     if (typeof r.codex_out_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(r.codex_out_sha256)) throw new Error(`round ${i + 1}: 缺/坏 codex_out_sha256(须 64 位 hex,fail-closed)`);
     let raw;
-    try { raw = readFileSync(r.codex_out); } catch (e) { throw new Error(`round ${i + 1}: 读不到 codex_out 文件 ${r.codex_out}(${e.message})`); }
+    try { raw = readBoundedFile(r.codex_out, RAW_CAP, `round ${i + 1} codex_out`); } catch (e) { throw new Error(e.message); } // 有界安全读(普通文件+上限,修 I1)
     const got = sha256(raw);
     if (got !== r.codex_out_sha256) throw new Error(`round ${i + 1}: codex_out sha256 不符(篡改/串文件?expected ${r.codex_out_sha256.slice(0, 12)}… got ${got.slice(0, 12)}…)`);
     let co;
