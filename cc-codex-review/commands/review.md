@@ -144,6 +144,11 @@ echo '{"taskGoal":"…","materials":"…(或留空=见代码上下文)","codeCon
   - `render-unresolved`(`{state, meta}`):出四段块。
   - state 只在本次循环内传递、不持久化(守 §1);语义决策与分歧标注(annotations)仍由你(Claude)给,脚本不自行判断(守 §2)。
   - **每次 CLI 调用都须显式传 state(防漏传清空历史→假收敛,RS-P2-013-R1)**:`reduce`/`validate-round` 必须带 `prevState.points`(**第 1 轮显式传 `{"round":0,"points":[]}`**,不可省略);`converge` 必须带 `state.points` 且 `claudeAgree` 为严格布尔。脚本对缺省/坏输入返回 `{ok:false,error:...}` 而非默认放行。
+- **收敛诚实性独立审计(①「运动员兼裁判」缓解,`${CLAUDE_PLUGIN_ROOT}/scripts/review-audit.mjs`)**:`converge` 虽确定性,但它吃的是**你转述的**每轮 Codex 字段;为让"收敛是否诚实"可独立核验——
+  - **每轮 codex-round 用独立 `--out` 文件**(如 `/tmp/cc-r1.json`、`/tmp/cc-r2.json`,**不要覆盖**),并从其成功输出记下 `out_path` + `out_sha256`。
+  - 维护一份 **audit manifest**:`{claudeAgree:<bool>, rounds:[{round_index:<1-based 连续>, codex_out:"<rN.json 路径>", codex_out_sha256:"<该轮 64 hex 哈希,必填>", claude_actions:{adopted,rebutted,merges,annotations}}]}`——**manifest 只放你自己的动作,绝不放你转述的 Codex verdict/disposition/issues**(那些审计器只从 raw 文件读)。
+  - **收敛前必过审计门**:把 manifest 喂 `review-audit`,仅当回 `audited_converged:true` 才可在 §7 宣布 RESOLVED;否则(`audited_converged:false` 或 `evidence_invalid`)**不得宣布 RESOLVED**,按未收敛/证据无效处理并把 `failures`/`reasons` 告诉用户。
+  - **诚实边界**:这是**插件层、提高门槛**(把"信你转述"降为"从 Codex 真实产出独立重放"),非防恶意硬强制——你仍可跳过审计/篡改文件/在 final 谎称通过;真硬强制需 hook(后续档)。但默认流程跑了它,假收敛就需要主动造假而非随手发生。
 - **每轮记 P1 度量(`${CLAUDE_PLUGIN_ROOT}/scripts/metrics.mjs`)**:reduce 之后调 `round-metrics`(传 `prevState` + 本轮 `round`〔含你给的语义标签 `revision_induced`/`stuck`〕+ codex-round 输出的 `wall_clock_ms` 与 `attempts`)得本轮记录;循环结束 `aggregate` 汇总(含 `retried_rounds`=发生过重试的轮数)。**汇总时传 `expectedRounds`=本次循环已开始(`round++` 到达)的轮数**:若某轮因 `bad_verdict`/`codex_unavailable` 中断而没产出度量记录,`records.length < expectedRounds` → `complete:false` 且 `total_wall_clock_ms`/`retried_rounds` 归 null,**不拿残缺记录伪装完整成本**(修 MET-ERR-001)。`new/repeat` 由 id 是否在 prevState 出现**确定性判定**;`revision_induced`(⊆new:因上轮修订才出现)/`stuck`(⊆repeat:连续≥2 轮实质未变)由你据实标注。用于"轮次耗在新发现 vs 确认 vs 反复"的数据化复盘(跨 ≥3 个真实任务用 `aggregate-tasks`,各任务 `expectedRounds` 对齐传入)。**若套了镜头**,在 experiment run 记录里带 `lens=<effective_lens>`(LENS-PROVENANCE),使不同镜头的数据可区分、可同镜头比较。
 - **Codex 调用核对(软信号,`${CLAUDE_PLUGIN_ROOT}/scripts/verify-codex-session.mjs`)**:每轮 codex-round 返回的 `thread_id` 累积;收尾**尽量**把它们作 stdin `{threadIds:[...]}` 喂 verify-codex-session(查 `~/.codex/sessions`),把 `verified/missing` 附在 §7 供人工留意。**⚠️ 这是软信号、不是硬门禁**:`missing` **不挡收敛、不直接判不可信**——机制本就可绕(故不做硬门禁,见 DESIGN §12),真正的强制需 hook。但现版本 codex **落盘可靠**(早期一次 missing 系升级窗口瞬态),故 `missing` **值得人工当回事**:提示"未能从 session 核实,请人工留意";`verified` 是"真调了 Codex"的证据。
 - **写回决策日志(见 `docs/specs/2026-06-27-decision-log-design.md`)**:收尾时把本轮结论落进 `.cc-codex-review/decisions.{jsonl,md}`,供后续轮 Codex 经 `--repo` 读到——
@@ -161,7 +166,7 @@ echo '{"taskGoal":"…","materials":"…(或留空=见代码上下文)","codeCon
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-round.mjs" \
      --schema "${CLAUDE_PLUGIN_ROOT}/schemas/verdict.schema.json" \
-     --out "<临时文件 last.json>" \
+     --out "<本轮独立文件,如 /tmp/cc-r${round}.json;勿覆盖上一轮>" \
      [--repo <dir>] [--model <m>] [--resume <thread_id>] \
      < <packet 或增量文件>
    ```
@@ -169,7 +174,7 @@ echo '{"taskGoal":"…","materials":"…(或留空=见代码上下文)","codeCon
 3. 解析脚本 stdout 的那行 JSON:
    - `error=codex_unavailable` → 告诉用户运行 `/codex:setup`,**停止**。
    - `error=bad_verdict` → 已重试仍失败;把 `raw_message` + `codex_exit` + `stdout_tail`/`stderr_tail`(含 codex 的 error/turn.failed 事件)给用户帮助排查,**停止**。
-   - 成功:记下 `thread_id`、`verdict`、`remaining_issues`(含各条 `id`)、`candidate_dispositions`、`truncated`、`reviewed_scope`、`assumptions`、`wall_clock_ms`(本轮交付耗时,含重试)、`attempts`(尝试次数,>1 即有重试)——后两者供 P1 度量。
+   - 成功:记下 `thread_id`、`verdict`、`remaining_issues`(含各条 `id`)、`candidate_dispositions`、`truncated`、`reviewed_scope`、`assumptions`、`wall_clock_ms`(本轮交付耗时,含重试)、`attempts`(尝试次数,>1 即有重试)、**`out_path` + `out_sha256`(供审计 manifest;见上「收敛诚实性独立审计」)**——wall_clock/attempts 供 P1 度量。同时把本轮一条 `{round_index:<本轮序号>, codex_out:<out_path>, codex_out_sha256:<out_sha256>, claude_actions:{adopted,rebutted,merges,annotations}}` 追加进 audit manifest(`round_index` 须 1-based 连续、`sha256` 必填)。
 4. **打印进度行**:`第 N 轮 · Codex=<verdict> · 剩 <k> issue(<b> blocker) · Claude=<同意/持异议>`。
 5. 处理:对**每条 open issue**二选一(两者都使该点进 `candidate`、等下一轮 Codex 裁定):
    - **采纳并修订**(`adopted`,response_type=revision):接受该 issue,改你的主张。
@@ -191,6 +196,7 @@ echo '{"taskGoal":"…","materials":"…(或留空=见代码上下文)","codeCon
   <商定的结论>
   <后续行动的具体建议>
   ```
+  **前置硬条件:必须先过 §6 的收敛诚实性独立审计**(`review-audit` 回 `audited_converged:true`)才能宣布 RESOLVED;并在结论里附一行 `独立重放审计:通过(N 轮,raw --out 重放)` 作可信佐证。审计未过则走下面的未收敛分支、不得宣布 RESOLVED。
   若最后一轮 `truncated=true`,**必须**在结论顶部加一行 `⚠️ 基于截断材料(reviewed_scope: ...),非完整签核`,避免被误读为全量通过。
   **若本次有声明侧重角度(`effective_lens` 非空,*或*你据评审指令实际侧重了某视角,见 §1 LENS-DECLARE),必须**在结论顶部加一行 `本次侧重:<角度>(额外侧重此视角;通过=全面签核,非仅该视角)`(**无显式 `--lens` 的隐性侧重也要声明**;LENS-DECLARE/LENS-SCOPE)。
   **尽量**在结论里附:本次 codex `thread_id` + verify-codex-session 的 `verified`/`missing`(软信号供人工核),并把 `paths` 里每个 verified id 的 **rollout 文件路径**一并列出(便于用户一键打开 codex 自留的完整对话记录)。**`missing` 不直接判不可信、不挡 RESOLVED**(机制可绕、不做硬门禁),但现版本 codex 落盘可靠,故 `missing` 值得人工当回事——提示"未能从 session 核实,请人工留意";`verified` 则佐证真调了 Codex。

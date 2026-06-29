@@ -2,6 +2,14 @@
 // 单轮 Codex 复核原语:stdin=评审包,stdout=一行结果 JSON。纯确定性,无循环。
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync, unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { isValidVerdict } from './verdict-shape.mjs';
+
+// 证据字段(review-audit ① 用):成功时回 --out 文件路径 + sha256,供独立重放审计核对"Codex 实际产出"(防驱动方转述污染)。
+function outEvidence(p) {
+  try { return { out_path: p, out_sha256: createHash('sha256').update(readFileSync(p)).digest('hex') }; }
+  catch { return { out_path: p, out_sha256: null }; }
+}
 
 function parseArgs(argv) {
   const a = { repo: null, model: null, resume: null, schema: null, out: null, raw: false };
@@ -70,29 +78,8 @@ function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
 }
 
-// schema 是 strict、required 覆盖全部字段。合规的 verdict 必须满足完整结构(缺/类型错即协议异常,
-// 见 RS-P0-BOUNDARY):枚举 verdict、三个数组(含 item 形状)、rationale/reviewed_scope 字符串、truncated 布尔。
-const SEV = new Set(['blocker', 'major', 'minor']);
-const V_KEYS = ['verdict', 'remaining_issues', 'candidate_dispositions', 'rationale', 'truncated', 'reviewed_scope', 'assumptions'];
-const ISSUE_KEYS = ['id', 'title', 'detail', 'severity'];
-const DISP_KEYS = ['id', 'disposition'];
-// 精确键集:对应 schema 的 additionalProperties:false——不多不少(修 RS-P0-EXTRA)。
-function exactKeys(o, keys) {
-  if (!o || typeof o !== 'object') return false;
-  const k = Object.keys(o);
-  return k.length === keys.length && keys.every((x) => Object.prototype.hasOwnProperty.call(o, x));
-}
-function isValidVerdict(v) {
-  if (!exactKeys(v, V_KEYS)) return false;
-  if (v.verdict !== 'AGREE' && v.verdict !== 'CHANGES') return false;
-  if (typeof v.rationale !== 'string' || typeof v.reviewed_scope !== 'string' || typeof v.truncated !== 'boolean') return false;
-  if (!Array.isArray(v.assumptions) || !v.assumptions.every((x) => typeof x === 'string')) return false;
-  if (!Array.isArray(v.remaining_issues) || !v.remaining_issues.every((it) =>
-    exactKeys(it, ISSUE_KEYS) && typeof it.id === 'string' && typeof it.title === 'string' && typeof it.detail === 'string' && SEV.has(it.severity))) return false;
-  if (!Array.isArray(v.candidate_dispositions) || !v.candidate_dispositions.every((d) =>
-    exactKeys(d, DISP_KEYS) && typeof d.id === 'string' && (d.disposition === 'confirmed' || d.disposition === 'rejected'))) return false;
-  return true;
-}
+// verdict 结构形状校验抽到 verdict-shape.mjs(与 review-audit 重放门共享同一套规则,避免漂移)。
+// schema 是 strict、required 覆盖全部字段:枚举 verdict、三个数组(含 item 形状)、rationale/reviewed_scope 字符串、truncated 布尔(RS-P0-BOUNDARY)。
 
 // 认证/未登录文本特征。codex 可能把 API 级 auth 失败放 stderr,也可能放 --json stdout 事件(修 CR-UNAUTH-STDOUT)。
 function hasAuthError(text) { return /not logged in|not authenticated|please run .*login|unauthor/i.test(text || ''); }
@@ -204,7 +191,7 @@ function main() {
 
   if (a.raw) {
     // --raw:把 codex 按 --output-schema 写出的结构化产物原样放 result(do 出方案等非 verdict 用途)。
-    emit({ ok: true, thread_id: threadId, result: verdict, wall_clock_ms: Math.round(Number(process.hrtime.bigint() - startNs) / 1e6), attempts: attemptsMade });
+    emit({ ok: true, thread_id: threadId, result: verdict, ...outEvidence(a.out), wall_clock_ms: Math.round(Number(process.hrtime.bigint() - startNs) / 1e6), attempts: attemptsMade });
     return;
   }
   emit({
@@ -217,6 +204,7 @@ function main() {
     truncated: !!verdict.truncated,
     reviewed_scope: verdict.reviewed_scope || '',
     assumptions: verdict.assumptions,
+    ...outEvidence(a.out), // 证据:--out 路径 + sha256,供 review-audit 独立重放(①)
     // P1 度量:本轮**交付**真机耗时——从首次尝试到成功,**含 bad_verdict 重试**(如实反映本轮真实墙钟成本)。
     // 单调时钟,保证非负(与 experiment.mjs 的非负约束一致);想区分有效时间 vs 重试开销时用 attempts。
     wall_clock_ms: Math.round(Number(process.hrtime.bigint() - startNs) / 1e6),

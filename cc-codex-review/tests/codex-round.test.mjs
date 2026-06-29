@@ -47,6 +47,9 @@ test('fresh round: returns ok with thread_id and AGREE verdict', () => {
   assert.equal(res.verdict, 'AGREE');
   assert.deepEqual(res.remaining_issues, []);
   assert.equal(res.attempts, 1, '一次成功 attempts=1');
+  // 证据字段(review-audit ① 用):out_path + 64 hex sha256
+  assert.equal(typeof res.out_path, 'string');
+  assert.match(res.out_sha256 || '', /^[0-9a-f]{64}$/, 'out_sha256 应为 64 位 hex');
 });
 
 test('fresh round: no --repo => -s read-only + --skip-git-repo-check, never --last', () => {

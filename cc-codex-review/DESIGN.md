@@ -249,6 +249,7 @@ cc-codex-review/
   commands/review.md                # 命令体 = Claude 执行的互审协议
   scripts/codex-round.mjs           # 单轮 Codex 调用原语(确定性,可单测)
   scripts/review-state.mjs          # 共识账本无状态 reducer/validator/render(P2,§12)
+  scripts/review-audit.mjs          # 收敛诚实性独立重放审计:从 raw --out 重建 Codex 字段(①「运动员兼裁判」缓解,v0.13.0,§12)
   scripts/packet-build.mjs          # 评审包固定段(你的职责 + schema 要求 + 镜头注入)确定性生成(v0.12.5,§12)
   scripts/metrics.mjs               # dogfood 逐轮/跨任务度量(P1,§12)
   schemas/verdict.schema.json        # verdict 结构化输出 schema(strict 模式)
@@ -365,5 +366,13 @@ LLM 循环难做单元测试,采用:
   - 新增 `tests/packet-build.test.mjs` 12 例(DUTY_BLOCK 逐字 + 四段齐全 + 镜头生命周期 + 未知 lens fail-closed + CLI),review-state 加 3 例 confirmed-echo 回归(容忍 / 不重开 / 不误伤合法重开),全套 **205 绿**。两者均把"防绕过"从 prompt 软约束降为脚本硬保证。
 
 - **决策日志膨胀治理:closed/退役状态(v0.12.6)**:长期/跨多项目使用时决策日志单调增长(kk_notify 一个项目即累计 37 条),Codex 每轮读的活跃基线越来越长。加 `status:"closed"` 退役语义:`set-status` 到 closed(带退役理由)→ 从活跃两段隐藏、仅留 jsonl 历史,末尾给一行退役计数。是对 `supersedes`(被具体新决策替换)的补充——**无替换的退役**(功能删除/并入更大规则)。**关键边界(诚实)**:`closed` 仅用于"不再是活跃约束";**已实现但仍须遵守的约束保持 `decided` 可见**——隐藏会让后续 Codex 看不到、可能回归(故不做"已实现即隐藏")。`decisions-log.mjs`:STATUSES 加 closed、validate 要求 closed 带 rationale、set-status→closed 清 open 专属字段、renderMarkdown 隐藏 closed+superseded 并计数;review.md/do.md 写回段加 close 用法。新增 5 例单测,全套 **213 绿**。
+
+- **① 运动员兼裁判 — 收敛诚实性独立重放审计(v0.13.0,经 `do` 协作 + 自审 dogfood)**:用 `/cc-codex-review:do` 与 Codex 协作攻这条**结构性天花板**(DESIGN 长期列为已知泄漏)。Claude 在 review/do 里既驱动又判收敛;`review-state` 的 converge 虽确定性,但**喂它的每轮 Codex 字段是 Claude 转述的**——可误报 verdict/disposition、隐藏分歧 → 假收敛喂成真收敛。
+  - **抓手(Claude×Codex 方案独立 → 高度一致)**:每轮 codex-round 把 Codex **原始结构化输出**写到 `--out` 文件。新增 `scripts/review-audit.mjs` **直接读这些 raw 文件**重建每轮 Codex 字段(verdict/remaining_issues/candidate_dispositions),只接受 Claude 提供**自己的动作**(adopted/rebutted/merges/annotations/claudeAgree),再用现有 `review-state` 的 validateRound→reduce→validateState→canConverge **独立重放**;仅 `audited_converged:true` 才许 §7 宣布 RESOLVED。**两个独立通道拆开**:Codex 事实只从文件来,Claude 决策显式声明、不伪装成事实。
+  - **配套**:`codex-round.mjs` 成功回 `out_path`+`out_sha256`(防篡改/串文件);verdict 形状校验抽成共享 `scripts/verdict-shape.mjs`(codex-round 产出门 + review-audit 重放门**复用同一套规则**,避免漂移);`review-audit` **fail-closed**——raw 必须合 verdict schema(否则缺失数组被当空→schema 非法证据也审过,自审 I1)、`sha256` **必填**(缺哈希=防篡改形同虚设,自审 I2)、`round_index` **1-based 连续**(挡 manifest 内部抽轮/乱序,自审 I3)、坏 JSON/claudeAgree 非布尔/未通过→非零退出;review.md §6/§7 接入(每轮独立 `--out`、记 `out_path/out_sha256`、维护 manifest〔只放 Claude 动作〕、收敛前必过审计门)。CONFIRM-ECHO(v0.12.5)在重放里一致生效。
+  - **诚实边界(关键)**:**插件层、提高门槛**,非防恶意硬强制——Claude 仍可跳过审计、篡改 `--out`、**漏报末尾轮(manifest 完整性是受信边界:round_index 连续只挡内部抽轮,漏掉最后一轮靠脚本无法发现,自审 I3)**、或在 final 谎称通过;真硬强制需 Claude Code hook(拦截收尾、强制 audit 通过才放行 RESOLVED;后续高档位)。价值=把诚实性从"信 Claude 转述"降为"从 Codex 真实产出独立确定性重放",假收敛需主动造假而非随手发生。**仍是单实例自审**(③ 兼裁判的"另一独立模型/盲审 agent"未做,缓):重放的是 Codex 已产出的事实,Claude 仍选 adopted/rebutted——但已显式暴露、可人工核。
+  - **覆盖范围(诚实)**:本期**仅 review.md 接入**审计门;**`do.md` 尚未接入**(其 §4 分歧互审 / §6 复核的收敛泄漏在接入前仍在)——列为紧后续。
+  - 新增 `tests/review-audit.test.mjs` 16 例(正常收敛 / 揪假收敛〔raw rejected〕/ 揪隐藏新 issue / CONFIRM-ECHO 容忍 / claudeAgree 严格 / schema 非法 raw〔I1〕/ sha256 必填〔I2〕/ round_index 连续〔I3〕/ CLI 退出码);codex-round 加证据字段断言;全套 **230 绿**。**do.md 接入、盲审 agent 列为后续**。
+  - **经 `do` 协作 + 自审 dogfood**(本插件审自己):Codex §6 复核抓出 5 个真问题——I1(blocker:schema 非法 raw 也审过)、I2(major:sha 可选)、I3(major:manifest 完整性未审)、I4(major:DESIGN 谎称 do.md 已接入)、I5(minor:review.md 指令自相矛盾),全部修正(I4 改为诚实标注 do.md 未接入)。
 
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。
