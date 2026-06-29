@@ -150,6 +150,7 @@ echo '{"taskGoal":"…","materials":"…(或留空=见代码上下文)","codeCon
   - **entry 必填字段**(脚本会校验,缺则报 `坏 source`/`statement 缺失` 拒写):`source:"review"`、`statement:"<决策或分歧一句话>"`、`status`、`rationale`(decided 必填);**`id`/`ts` 由脚本自动分配,不要自己传**(传了也被忽略);严重度用 `severity` 字段、勿塞进 rationale 文本。
   - **UNRESOLVED 三段映射**:✅ 已达成→`{op:"append",entry:{source:"review",statement:"…",status:"decided",rationale:"…",severity:"major"}}`;❌ 仍未达成→`{op:"append",entry:{source:"review",statement:"…",status:"open",positions:{claude:"…",codex:"…"},severity:"major"}}`;🔶 待复核**先不写**。RESOLVED(双 AGREE)则把商定结论作 `decided` 写入。
   - **某条之前是 `open`、本轮谈拢了**:用 `{op:"set-status",id:旧open_id,status:"decided",rationale:"..."}` **原地翻**(带 rationale,不堆条);旧决策被不同新决策推翻→append + `supersedes:[旧id]`(旧条渲染时自动隐藏)。
+  - **退役一条不再适用的决策**(功能删除 / 被并入更大规则,**无具体替换**):`{op:"set-status",id,status:"closed",rationale:"退役理由"}` → 从活跃基线隐藏、仅留 jsonl 历史。**注意**:`closed` 仅用于"不再是活跃约束";**已实现但仍须遵守的约束保持 `decided` 别 closed**(隐藏会让后续 Codex 看不到、可能回归)。
   - **先让 Codex 确认记录无误**(放进本轮最后一个 packet:decided 确实达成、open 立场记对了),确认后调 `node "${CLAUDE_PLUGIN_ROOT}/scripts/decisions-log.mjs" upsert`(stdin `{"repo":"<生效repo>","ops":[...]}`)。
   - **`--repo none` → 跳过写回**(纯文本评审,无 repo);脚本报错则如实告诉用户、不阻断结论。
   - **不自动 `git commit`**;可提示用户决策已记录、自行提交。

@@ -42,7 +42,7 @@
 ```
 
 - **id 全局唯一、跨轮稳定**:`append` 时由脚本自动分配下一个空闲 `D<n>`(避免 Claude 撞号);`set-status`/`upsert` 按已存在 id 引用。
-- **状态语义**:`decided` = 当轮双方 AGREE 且 Codex 确认;`open` = 仍未谈拢(到顶/停滞/被打断),带双方立场 + 严重度。
+- **状态语义**:`decided` = 当轮双方 AGREE 且 Codex 确认;`open` = 仍未谈拢(到顶/停滞/被打断),带双方立场 + 严重度;`closed`(v0.12.6) = 已退役的决策(不再适用:功能删除/并入更大规则,**无具体替换**),带退役理由 `rationale`,从活跃基线隐藏、仅留 jsonl 历史。**`closed` 仅用于"不再是活跃约束";已实现但仍须遵守的约束保持 `decided`**(隐藏会致后续回归)。
 - **可演进**:某 `open` 在后续轮谈拢 → `set-status` 翻成 `decided` **并带上 `rationale`**(`{op:"set-status",id,status:"decided",rationale}`;原地翻、不堆条、自动清掉 open 专属字段 positions/severity)。决策被**不同的新决策**推翻 → append 新 entry 用 `supersedes` 指向旧 id。**被 supersede 的条目渲染时从活跃两段隐藏**(只留 jsonl 历史),不再污染 Codex 的基线(I2)。
 
 ### 3.3 脚本 `scripts/decisions-log.mjs`(纯函数 + 薄 CLI + 单测,沿用现有风格)

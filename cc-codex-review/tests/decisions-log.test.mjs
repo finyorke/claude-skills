@@ -111,6 +111,67 @@ test('renderMarkdown: 空 → 两段都给占位', () => {
   assert.match(md, /## ❌ 未决\(开放分歧\)\n（暂无）/);
 });
 
+// ---- closed/退役(膨胀治理,v0.12.6)----
+test('closed: validate 接受 closed(带 rationale);缺 rationale → 报错', () => {
+  assert.deepEqual(validate([{ id: 'D1', status: 'closed', statement: 'X', rationale: '功能已删', source: 'do', ts: 't' }]), { ok: true });
+  const v = validate([{ id: 'D1', status: 'closed', statement: 'X', rationale: '', source: 'do', ts: 't' }]);
+  assert.equal(v.ok, false);
+  assert.match(v.errors.join('\n'), /closed 需 rationale/);
+});
+
+test('closed: set-status decided→closed 带退役理由,清掉 open 专属字段', () => {
+  const start = [{ id: 'D1', status: 'open', statement: 'X', positions: { claude: 'a', codex: 'b' }, severity: 'major', source: 'review', ts: 't' }];
+  const out = applyOps(start, [{ op: 'set-status', id: 'D1', status: 'closed', rationale: '该功能已下线,约束失效' }]);
+  assert.equal(out[0].status, 'closed');
+  assert.equal(out[0].rationale, '该功能已下线,约束失效');
+  assert.equal(out[0].positions, undefined);
+  assert.equal(out[0].severity, undefined);
+  assert.equal(validate(out).ok, true);
+});
+
+test('closed: set-status→closed 不带新退役理由 → 抛错(不沿用原 decided rationale,修 I1)', () => {
+  const start = [{ id: 'D1', status: 'decided', statement: 'X', rationale: '原决策理由', source: 'do', ts: 't' }];
+  assert.throws(() => applyOps(start, [{ op: 'set-status', id: 'D1', status: 'closed' }]), /须带非空退役理由/);
+  assert.throws(() => applyOps(start, [{ op: 'set-status', id: 'D1', status: 'closed', rationale: '   ' }]), /须带非空退役理由/);
+  // 带新理由则成功且用新理由(非沿用旧的)
+  const ok = applyOps(start, [{ op: 'set-status', id: 'D1', status: 'closed', rationale: '功能已下线' }]);
+  assert.equal(ok[0].rationale, '功能已下线');
+});
+
+test('closed: CLI upsert set-status→closed 缺退役理由 → bad_op 非零退出(修 I1)', () => {
+  const repo = freshRepo();
+  cli('upsert', { repo, ops: [{ op: 'append', entry: { status: 'decided', statement: 'A', rationale: 'r', source: 'review' } }] });
+  assert.throws(() => execFileSync('node', [SCRIPT, 'upsert'], { input: JSON.stringify({ repo, ops: [{ op: 'set-status', id: 'D1', status: 'closed' }] }), encoding: 'utf8' }), (e) => {
+    assert.match(String(e.stdout || ''), /bad_op|须带非空退役理由/); return true;
+  });
+});
+
+test('renderMarkdown: closed 从活跃两段隐藏 + 退役计数(decided 仍可见=已实现的活跃约束不被藏)', () => {
+  const entries = [
+    okDecided, // D1 decided,仍可见
+    { id: 'D2', status: 'closed', statement: '退役项', rationale: '功能删除', source: 'do', ts: 't' },
+  ];
+  const md = renderMarkdown(entries);
+  assert.match(md, /\[D1\] X/);            // decided 仍在
+  assert.doesNotMatch(md, /退役项/);        // closed 不在活跃段
+  assert.match(md, /另有 1 条已退役\(closed\)\/被取代\(superseded\)/);
+});
+
+test('renderMarkdown: 无退役项时不打计数行', () => {
+  assert.doesNotMatch(renderMarkdown([okDecided, okOpen]), /另有 .* 条已退役/);
+});
+
+test('CLI upsert: set-status→closed 落盘后 md 隐藏、jsonl 仍留历史', () => {
+  const repo = freshRepo();
+  cli('upsert', { repo, ops: [{ op: 'append', entry: { status: 'decided', statement: '约束A', rationale: 'r', source: 'review' } }] });
+  cli('upsert', { repo, ops: [{ op: 'set-status', id: 'D1', status: 'closed', rationale: '已退役' }] });
+  const md = rf(pj(repo, '.cc-codex-review', 'decisions.md'), 'utf8');
+  const jsonl = rf(pj(repo, '.cc-codex-review', 'decisions.jsonl'), 'utf8');
+  assert.doesNotMatch(md, /约束A/);                 // 活跃段隐藏
+  assert.match(md, /另有 1 条已退役/);
+  assert.match(jsonl, /"status":"closed"/);          // 历史仍在 jsonl
+});
+
 test('renderMarkdown: decided 带 supersedes 时标注', () => {
   const md = renderMarkdown([{ ...okDecided, id: 'D3', supersedes: ['D1'] }]);
   assert.match(md, /取代 D1/);

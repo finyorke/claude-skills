@@ -364,4 +364,6 @@ LLM 循环难做单元测试,采用:
   - **③ packet 固定段脚本化(`scripts/packet-build.mjs`,新)**:dogfood 发现执行 Claude 组 packet 时会把 §4「你的职责」散文压缩,致 v0.12.3 加的指令**根本没进 packet**。把固定段(「你的职责」+ 全部 schema 字段要求 + 镜头注入)抽成脚本权威生成(纯函数 `buildPacket`/`lensInjection` + `DUTY_BLOCK` 常量 + 薄 CLI),**逐字送达 Codex**;变量段(任务目标/材料/代码上下文/Claude 主张)由调用方填。review.md §4 改为调脚本生成 packet、不再手写职责段。**LENS-MODE 材料过滤是判断型规则、脚本不做**:`lens:"omission"` 由脚本生成(通用);focus 镜头(security/correctness/requirements)经 lens 自动生成会**抛 `bad_lens_focus`**——调用方须按 §4.5 过滤后用 `lensText` 字段逐字传入;镜头与材料**完全不匹配**→报参数错误(非静默退化)。此约束由自审 dogfood(Codex 抓出 I2:packet-build 对提案材料硬塞代码向 focus 文本=不忠实)逼出。
   - 新增 `tests/packet-build.test.mjs` 12 例(DUTY_BLOCK 逐字 + 四段齐全 + 镜头生命周期 + 未知 lens fail-closed + CLI),review-state 加 3 例 confirmed-echo 回归(容忍 / 不重开 / 不误伤合法重开),全套 **205 绿**。两者均把"防绕过"从 prompt 软约束降为脚本硬保证。
 
+- **决策日志膨胀治理:closed/退役状态(v0.12.6)**:长期/跨多项目使用时决策日志单调增长(kk_notify 一个项目即累计 37 条),Codex 每轮读的活跃基线越来越长。加 `status:"closed"` 退役语义:`set-status` 到 closed(带退役理由)→ 从活跃两段隐藏、仅留 jsonl 历史,末尾给一行退役计数。是对 `supersedes`(被具体新决策替换)的补充——**无替换的退役**(功能删除/并入更大规则)。**关键边界(诚实)**:`closed` 仅用于"不再是活跃约束";**已实现但仍须遵守的约束保持 `decided` 可见**——隐藏会让后续 Codex 看不到、可能回归(故不做"已实现即隐藏")。`decisions-log.mjs`:STATUSES 加 closed、validate 要求 closed 带 rationale、set-status→closed 清 open 专属字段、renderMarkdown 隐藏 closed+superseded 并计数;review.md/do.md 写回段加 close 用法。新增 5 例单测,全套 **213 绿**。
+
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。

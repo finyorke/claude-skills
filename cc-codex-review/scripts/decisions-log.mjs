@@ -5,7 +5,10 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const STATUSES = new Set(['decided', 'open']);
+// decided=双方已确认的活跃约束(即便已实现仍须遵守、保持可见);open=未决分歧;
+// closed=**已退役**的决策——不再适用(功能被删 / 被并入更大规则),从活跃基线隐藏、仅留 jsonl 历史。
+// 注意:closed 仅用于"不再是活跃约束";**已实现但仍生效的约束保持 decided**(隐藏会致后续回归)。
+const STATUSES = new Set(['decided', 'open', 'closed']);
 const SEV = new Set(['blocker', 'major', 'minor']);
 const SOURCES = new Set(['do', 'review']);
 
@@ -31,11 +34,13 @@ export function applyOps(entries, ops) {
     } else if (op.op === 'set-status') {
       const e = out.find((x) => x.id === op.id);
       if (!e) throw new Error(`set-status: 未知 id ${op.id}`);
+      // closed 须带**本次新退役理由**:否则会沿用原 decided 的 rationale 静默通过,把旧决策理由冒充成退役理由(修 I1,v0.12.6 自审 dogfood 发现)。
+      if (op.status === 'closed' && !(typeof op.rationale === 'string' && op.rationale.trim())) throw new Error(`set-status closed: 须带非空退役理由 rationale(不沿用原决策理由)`);
       e.status = op.status;
-      // 原地演进:可随状态翻转一并补字段(I1——open 谈拢→decided 须带 rationale,否则 validate 拦)。
+      // 原地演进:可随状态翻转一并补字段(I1——open 谈拢→decided 须带 rationale,否则 validate 拦;closed 须带退役理由)。
       for (const k of ['rationale', 'positions', 'severity']) if (op[k] !== undefined) e[k] = op[k];
-      // 翻成 decided 后,open 专属字段(positions/severity)不再适用,清掉保持 entry 干净。
-      if (op.status === 'decided') { delete e.positions; delete e.severity; }
+      // 翻成 decided/closed 后,open 专属字段(positions/severity)不再适用,清掉保持 entry 干净。
+      if (op.status === 'decided' || op.status === 'closed') { delete e.positions; delete e.severity; }
     } else {
       throw new Error(`未知 op ${op.op}`);
     }
@@ -56,7 +61,7 @@ export function validate(entries) {
     if (!SOURCES.has(e.source)) errors.push(`${e.id}: 坏 source ${JSON.stringify(e.source)}`);
     if (!e.ts || typeof e.ts !== 'string') errors.push(`${e.id}: ts 缺失`);
     if (!e.statement || typeof e.statement !== 'string') errors.push(`${e.id}: statement 缺失`);
-    if (e.status === 'decided' && !e.rationale) errors.push(`${e.id}: decided 需 rationale`);
+    if ((e.status === 'decided' || e.status === 'closed') && !e.rationale) errors.push(`${e.id}: ${e.status} 需 rationale`);
     if (e.status === 'open') {
       if (!e.positions || !e.positions.claude || !e.positions.codex) errors.push(`${e.id}: open 需 positions.claude/codex`);
       if (!SEV.has(e.severity)) errors.push(`${e.id}: open 需合法 severity`);
@@ -67,10 +72,13 @@ export function validate(entries) {
 }
 
 // 从 entries 渲染 decisions.md(Codex 实际读这个)。
-// 被其它 entry supersede 的条目从活跃两段隐藏(I2:旧 open/decided 谈拢/推翻后不该再出现在基线里;历史仍在 jsonl)。
+// 从活跃两段隐藏:① 被其它 entry supersede 的(I2:被替换);② status=closed 的(已退役、不再适用)。
+// 二者都只从渲染隐藏、历史仍在 jsonl;末尾给一行退役计数,保持活跃基线聚焦(膨胀治理,v0.12.6)。
 export function renderMarkdown(entries) {
   const superseded = new Set(entries.flatMap((e) => (Array.isArray(e.supersedes) ? e.supersedes : [])));
-  const active = entries.filter((e) => !superseded.has(e.id));
+  const isHidden = (e) => superseded.has(e.id) || e.status === 'closed';
+  const active = entries.filter((e) => !isHidden(e));
+  const hiddenCount = entries.filter(isHidden).length;
   const decided = active.filter((e) => e.status === 'decided');
   const open = active.filter((e) => e.status === 'open');
   const L = [];
@@ -89,6 +97,8 @@ export function renderMarkdown(entries) {
   for (const e of open) {
     L.push(`- [${e.id}] ${e.statement} · 严重度:${e.severity} · Claude:${e.positions.claude} / Codex:${e.positions.codex}  (${e.source} · ${e.ts})`);
   }
+  L.push('');
+  if (hiddenCount) L.push(`> 另有 ${hiddenCount} 条已退役(closed)/被取代(superseded),从活跃基线隐藏,历史见 decisions.jsonl。`);
   L.push('');
   return L.join('\n');
 }
