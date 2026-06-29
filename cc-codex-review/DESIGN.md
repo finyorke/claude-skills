@@ -249,6 +249,7 @@ cc-codex-review/
   commands/review.md                # 命令体 = Claude 执行的互审协议
   scripts/codex-round.mjs           # 单轮 Codex 调用原语(确定性,可单测)
   scripts/review-state.mjs          # 共识账本无状态 reducer/validator/render(P2,§12)
+  scripts/packet-build.mjs          # 评审包固定段(你的职责 + schema 要求 + 镜头注入)确定性生成(v0.12.5,§12)
   scripts/metrics.mjs               # dogfood 逐轮/跨任务度量(P1,§12)
   schemas/verdict.schema.json        # verdict 结构化输出 schema(strict 模式)
   tests/                            # codex-round / review-state 单测 + 假 codex + schema strict 守护
@@ -357,5 +358,10 @@ LLM 循环难做单元测试,采用:
   - **互审质量旁证(非橡皮图章)**:Codex 主动**升级**严重度(P5 STATUS-UNCHECKED minor→major,Claude 核实前端后接受)、Claude 主动**撤回**自有 issue(P4 COMMENT-GAP,经 Codex 指出属有意范围);`do` 收口 D30/D31 时 round 2 **Codex 文字 AGREE 但 disposition 误标 rejected(自相矛盾)**,执行 Claude **拒绝在矛盾信号上判收敛**、补一轮消歧 → 这是状态机"无隐式确认/disposition 必一致"防假收敛设计的**首次真实触发并奏效**。
   - **`do` 安全行为(实证)**:Codex 用量上限期间,`do` 正确**停下报告、不擅自单方实现**(符合"Codex 不可用即停"协议),由用户决定降级方案。
   - **诚实边界**:7 轮均 Claude 单驱动(运动员兼裁判仍在);Codex 落盘可靠故 `verified ✓` 贯穿;样本为单一项目、单一执行者,结论按此打折。
+
+- **CONFIRM-ECHO 下沉脚本 + packet 固定段脚本化(v0.12.5,把 kk_notify dogfood 学到的两点固化为代码保证)**:dogfood 后复盘,把两处"靠执行 Claude 自觉"的脆弱点下沉为脚本级保证:
+  - **④ CONFIRM-ECHO 原生容忍(`review-state.mjs`)**:Codex 在 AGREE 轮稳定把已 `confirmed` 的点回显进 `remaining_issues`,原撞上 validate-round"confirmed 却在 remaining_issues=矛盾"硬校验 → 旧版(v0.12.4)靠执行 Claude **每轮手动删除**(§6 临场归一,可能漏)。现 `reduce`/`validateRound` **原生容忍**:本轮被 `confirmed` 的 id 在 `remaining_issues` 的出现按 **disposition 为准**当无害 echo 忽略(该点保持 agreed、不被 `applyIssues` 打回 open),validate-round 不再判矛盾。**关键区分**:只跳过"本轮 confirmed"的 id;**往轮 agreed 点这轮重现于 remaining_issues(本轮未 confirmed)仍正常重开**(合法"重新质疑"路径不受影响,有专门回归用例守护)。执行 Claude 可把 Codex 输出原样喂记账,不必再手动清理。
+  - **③ packet 固定段脚本化(`scripts/packet-build.mjs`,新)**:dogfood 发现执行 Claude 组 packet 时会把 §4「你的职责」散文压缩,致 v0.12.3 加的指令**根本没进 packet**。把固定段(「你的职责」+ 全部 schema 字段要求 + 镜头注入)抽成脚本权威生成(纯函数 `buildPacket`/`lensInjection` + `DUTY_BLOCK` 常量 + 薄 CLI),**逐字送达 Codex**;变量段(任务目标/材料/代码上下文/Claude 主张)由调用方填。review.md §4 改为调脚本生成 packet、不再手写职责段。**LENS-MODE 材料过滤是判断型规则、脚本不做**:`lens:"omission"` 由脚本生成(通用);focus 镜头(security/correctness/requirements)经 lens 自动生成会**抛 `bad_lens_focus`**——调用方须按 §4.5 过滤后用 `lensText` 字段逐字传入;镜头与材料**完全不匹配**→报参数错误(非静默退化)。此约束由自审 dogfood(Codex 抓出 I2:packet-build 对提案材料硬塞代码向 focus 文本=不忠实)逼出。
+  - 新增 `tests/packet-build.test.mjs` 12 例(DUTY_BLOCK 逐字 + 四段齐全 + 镜头生命周期 + 未知 lens fail-closed + CLI),review-state 加 3 例 confirmed-echo 回归(容忍 / 不重开 / 不误伤合法重开),全套 **205 绿**。两者均把"防绕过"从 prompt 软约束降为脚本硬保证。
 
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。

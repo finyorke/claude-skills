@@ -92,13 +92,34 @@ test('validateRound: disposition 不得引用未知/非 candidate id', () => {
   assert.match(r.errors.join('\n'), /disposition 引用未知 id: CX/);
 });
 
-test('validateRound: confirmed 却仍在 remaining_issues = 矛盾(RS-P2-001)', () => {
+test('CONFIRM-ECHO: confirmed 的 id 又回显在 remaining_issues 不再判矛盾(v0.12.5,validateRound 容忍)', () => {
   const r = validateRound(twoCand, {
     candidate_dispositions: [{ id: 'C1', disposition: 'confirmed' }, { id: 'C2', disposition: 'rejected' }],
     remaining_issues: [{ id: 'C1', title: 't1', severity: 'major' }, { id: 'C2', title: 't2', severity: 'minor' }],
   });
-  assert.equal(r.ok, false);
-  assert.match(r.errors.join('\n'), /矛盾:C1 被 confirmed 却仍出现在 remaining_issues/);
+  assert.equal(r.ok, true, r.errors.join('; '));
+});
+
+test('CONFIRM-ECHO: reduce 把 confirmed 的回显当无害 echo,该点保持 agreed 不被重开', () => {
+  const s = reduce(twoCand, {
+    verdict: 'AGREE',
+    candidate_dispositions: [{ id: 'C1', disposition: 'confirmed' }, { id: 'C2', disposition: 'confirmed' }],
+    remaining_issues: [{ id: 'C1', title: 't1', severity: 'major' }, { id: 'C2', title: 't2', severity: 'minor' }], // Codex 全回显
+  });
+  assert.equal(s.points.find((p) => p.id === 'C1').state, 'agreed');
+  assert.equal(s.points.find((p) => p.id === 'C2').state, 'agreed');
+  // 收敛闸门据此放行(无残留 candidate/open)
+  assert.equal(canConverge(s, 'AGREE', true).converged, true);
+});
+
+test('CONFIRM-ECHO 不误伤合法重开:往轮 agreed 点这轮重现于 remaining_issues(本轮未 confirmed)仍重开', () => {
+  const priorAgreed = { round: 3, points: [{ id: 'A1', state: 'agreed', severity: 'major', title: 't' }] };
+  const s = reduce(priorAgreed, {
+    verdict: 'CHANGES',
+    candidate_dispositions: [], // A1 本轮不是 candidate、不被 confirmed
+    remaining_issues: [{ id: 'A1', title: 't', detail: 'codex 重新质疑', severity: 'major' }],
+  });
+  assert.equal(s.points.find((p) => p.id === 'A1').state, 'open'); // 合法"重新质疑"路径不受 CONFIRM-ECHO 影响
 });
 
 test('validateRound: rejected 必须在 remaining_issues 给出理由', () => {

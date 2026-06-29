@@ -60,7 +60,12 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 基于 评审指令 + 材料 + 目标(+ repo/diff),写出:结论(通过 / 返工 / 阻止)+ 理由 + 给后续的具体修改建议。
 
 ## 4. 组装评审包(写入临时文件 packet.txt)
-结构:
+**固定段(「## 你的职责」+ 全部 schema 字段要求 + 镜头注入)由脚本权威生成,逐字送达 Codex——别手写/复述/压缩职责段**(防固定指令在转述中丢字,见 DESIGN §12 v0.12.5)。你只提供变量段(任务目标 / 待审材料 / 代码上下文 / Claude 主张),用:
+```bash
+echo '{"taskGoal":"…","materials":"…(或留空=见代码上下文)","codeContext":"…(repo→指示 git 自查 / diff→内联 / 无)","claudeClaim":"…(§3 主张)","lens":"<omission 或 null>","round":1,"lensText":"<可选:focus 镜头经 §4.5 材料过滤后的焦点块全文;omission/无镜头则省略>"}' \
+  | node "${CLAUDE_PLUGIN_ROOT}/scripts/packet-build.mjs" > /tmp/packet.txt
+```
+脚本输出即完整 packet.txt(变量段 + 权威「你的职责」+ 镜头注入)。**镜头注入交脚本的边界(LENS-MODE,§4.5)**:`lens:"omission"` 由脚本生成(通用、无材料过滤);**focus 镜头(security/correctness/requirements)含「材料模式过滤」判断,脚本不做**——你按 §4.5 组好(已剔除与材料不符的代码专属项的)焦点块,作为 `lensText` 字段传入脚本逐字放置;若镜头与材料**完全不匹配**→ 按 §1/§4.5 **报参数错误**(不静默退化、不传 `lens`)。生成后结构等价于:
 ```
 ## 任务目标
 <目标内容或文件引用>
@@ -82,7 +87,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 优先质疑(按本次评审模式选取,见顶部「适用模式与边界」):实现路径、设计取舍、假设是否成立、需求是否完整覆盖、有无潜藏 bug、边界用例、论点/证据是否充分。
 按提供的 JSON Schema 输出全部字段:verdict / remaining_issues / candidate_dispositions / rationale / truncated / reviewed_scope / assumptions。
 - `remaining_issues[].id`:每条 issue 一个**稳定短 id**(如 `I1`/`I2`)。**新** issue 自取一个本次评审内唯一的 id;若是续审/重提**增量里已带 id 的点**(见下),**复用原 id**,不要换新。
-- `candidate_dispositions`:针对**增量里 Claude 列出的每个 candidate(按其 id)**给出裁定 `{id, disposition}`,`disposition ∈ {confirmed(认可该修订、不再质疑), rejected(仍不接受)}`。**首轮无 candidate 时输出空数组 `[]`**;不得引用未在增量中出现的 id;每个被列出的 candidate 都要给一条(不可遗漏)。`rejected` 的点应同时在 `remaining_issues` 里(用同一 id)给出仍存在的理由;**反之,`confirmed` 的点表示已了结、不要再列进 `remaining_issues`**(`remaining_issues` 只放仍然成立/未解决的问题——把已 confirmed 的点又放进去会与"确认"自相矛盾、被记账校验判为冲突)。`remaining_issues` 不是"本轮处理过的所有点"的回执清单,只是"仍未解决"的清单。
+- `candidate_dispositions`:针对**增量里 Claude 列出的每个 candidate(按其 id)**给出裁定 `{id, disposition}`,`disposition ∈ {confirmed(认可该修订、不再质疑), rejected(仍不接受)}`。**首轮无 candidate 时输出空数组 `[]`**;不得引用未在增量中出现的 id;每个被列出的 candidate 都要给一条(不可遗漏)。`rejected` 的点须同时在 `remaining_issues` 里(用同一 id)给出仍存在的理由;`confirmed` 的点表示已了结,**通常不必再列进 `remaining_issues`**(它是"仍未解决"清单、非回执清单;但若你仍回显已确认项也无妨——记账以 disposition 为准,confirmed 的回显会被当无害 echo 忽略,见 §6 CONFIRM-ECHO)。
 - `truncated`:若你只看到了材料/改动的一部分(被摘要、截断、或仅 diff 片段),置 true。
 - `reviewed_scope`:一句话说明你实际审了什么范围(如「仅 packet 内摘要,未读全量 diff」)。
 - `assumptions`:你为得出结论而做的假设(如「假设测试通过」)。
@@ -131,7 +136,7 @@ allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
   - **完整状态机**:`❌` ──(Claude 采纳修订 adopted / 反驳 rebutted)──▶ `🔶 candidate` ──(Codex confirmed)──▶ `✅ agreed`;`🔶` ──(Codex rejected)──▶ `❌`;`✅` ──(Codex 重新质疑)──▶ `❌`;point ──(合并)──▶ `merged`(终态)。任何"消失/沉默"都不构成状态迁移。
 - 只有 `agreed`(已确认)才计入 §7 的「✅ 已达成一致」;`candidate` 不算"已定结论"。仅记双方实质都接受的点,勿充数。
 - **确定性记账每轮必经 `${CLAUDE_PLUGIN_ROOT}/scripts/review-state.mjs`**(无状态纯函数 helper,CLI 经 bash 调用,stdin JSON→stdout JSON)——不要在散文里手工维护 candidate/agreed,避免漏算/误判。每轮固定管线:**`validate-round`(reduce 前)→ `reduce` → `validate-state`(reduce 后)→ `converge`(判收敛)**;state 在本次循环内于各轮间传递。命令:
-  - **喂脚本前先归一化 Codex 输出(CONFIRM-ECHO)**:Codex 在 AGREE 轮**常把已 `confirmed` 的点又回显进 `remaining_issues`**(措辞如"确认 major",意为确认而非重提)。这是 Codex 的稳定习性(实测多轮复现、且 packet 里要求它别这么做也常被忽略),不是真的重新质疑。**记账前你必须按 disposition 为准做归一**:凡某 id 在本轮 `candidate_dispositions` 里是 `confirmed`,就**从喂给 `validate-round`/`reduce` 的 `remaining_issues` 里删掉该 id**(否则撞上 `confirmed 却仍在 remaining_issues` 的矛盾校验、误判协议异常)。判别要点:`verdict=AGREE` + 该 id 已 confirmed + 回显文字是"确认/维持"语气 → 是 echo,删;若 Codex 明确**改判**(disposition 给 `rejected` 或文字明说"撤回确认/仍不接受")→ 不是 echo,按真异议留在 remaining_issues 并相应给 rejected。
+  - **CONFIRM-ECHO 已下沉为脚本保证(v0.12.5,无需手动归一)**:Codex 在 AGREE 轮**常把已 `confirmed` 的点又回显进 `remaining_issues`**(措辞如"确认 major",意为确认而非重提)。这是 Codex 稳定习性,**但 `review-state.mjs` 现已原生容忍**——本轮被 `confirmed` 的 id 若同时出现在 `remaining_issues`,validate-round 不再判矛盾、reduce 当无害 echo 忽略(disposition 为准、该点保持 agreed 不被打回 open)。**故你可把 Codex 输出的 `remaining_issues` 原样喂 `validate-round`/`reduce`,不必再手动删除已确认项**。唯一例外:若 Codex 是**真的改判**(给 `disposition:rejected` 或明说"撤回确认/仍不接受"),那就按真异议处理(它本就该走 rejected + 留在 remaining_issues),非 echo。
   - `validate-round`(在 `reduce` **之前**,对上一轮 state 校验本轮事件协议):disposition 覆盖全部 candidate、不引用未知/非 candidate、confirmed/rejected 与 remaining_issues 一致、adopted 只作用于 open、merge 前置态。**有 error 就先停、按协议异常处理,别带病 reduce。**
   - `reduce`(`{prevState, round}`→新 state):把本轮语义决策(`adopted`/`rebutted`/`candidate_dispositions`/`merges`/`annotations`)施加为状态迁移。
   - `validate-state`(对 reduce 后的新 state):id 唯一、合并图双向 reciprocity 且目标为活跃点(无链/环)等结构不变量。

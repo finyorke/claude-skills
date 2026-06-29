@@ -38,8 +38,12 @@ function applyDispositions(m, dispositions = []) {
     else if (d.disposition === 'rejected') p.state = 'open';
   }
 }
-function applyIssues(m, issues = []) {
+// skipIds:本轮被 confirmed 的 id(CONFIRM-ECHO 下沉,见 reduce)。Codex 在 AGREE 轮常把已 confirmed 的点又回显进
+// remaining_issues 当确认摘要;disposition 为准、视为无害 echo 忽略之,**不**把刚 agreed 的点打回 open。
+// 仅跳过"本轮 confirmed"的 id:往轮 agreed 点这轮重现于 remaining_issues(且本轮未被 confirmed)仍正常重开(合法"重新质疑")。
+function applyIssues(m, issues = [], skipIds) {
   for (const it of issues) {
+    if (skipIds && skipIds.has(it.id)) continue;
     const p = m.get(it.id);
     if (!p) m.set(it.id, { id: it.id, state: 'open', severity: it.severity || 'major', title: it.title || '', detail: it.detail || '' });
     // 用字段存在性更新(修 RS-P2-016):schema 允许空串,Codex 给 title:""/detail:"" 须能清除旧文案,不能因 falsy 被跳过而残留过期理由。
@@ -88,6 +92,8 @@ function applyAnnotations(m, annotations = []) {
   // 深拷贝 annotation 字段值,避免对象/数组值在 nextState 与 round 入参间共享别名(修 RS-P2-014)。
   for (const an of annotations) { const p = m.get(an.id); if (!p) continue; const { id, ...f } = an; p.meta = { ...(p.meta || {}), ...structuredClone(f) }; }
 }
+// 本轮被 confirmed 的 candidate id 集合(CONFIRM-ECHO:供 applyIssues 跳过其在 remaining_issues 里的无害回显)。
+function confirmedSet(round) { return new Set(((round && round.candidate_dispositions) || []).filter((d) => d && d.disposition === 'confirmed').map((d) => d.id)); }
 
 // 纯函数:上一轮 state + 本轮输入 → 新 state(不改入参)。
 // round = { verdict, remaining_issues:[{id,title,detail,severity}], candidate_dispositions:[{id,disposition}],
@@ -96,7 +102,7 @@ export function reduce(prevState, round) {
   const m = cloneMap(prevState);
   const r = round || {};
   applyDispositions(m, r.candidate_dispositions);
-  applyIssues(m, r.remaining_issues);
+  applyIssues(m, r.remaining_issues, confirmedSet(r)); // CONFIRM-ECHO:跳过本轮 confirmed 的 id 在 remaining_issues 的回显
   applyAdopted(m, r.adopted);
   applyRebutted(m, r.rebutted);
   applyMerges(m, r.merges);
@@ -150,7 +156,9 @@ export function validateRound(prevState, round) {
     if (!p) errors.push(`disposition 引用未知 id: ${d.id}`);
     else if (p.state !== 'candidate') errors.push(`disposition 引用非 candidate(state=${p.state}) 的 id: ${d.id}`);
     if (!DISPOSITIONS.includes(d.disposition)) errors.push(`disposition ${d.id}: 非法值 '${d.disposition}'`);
-    if (d.disposition === 'confirmed' && issueIds.has(d.id)) errors.push(`矛盾:${d.id} 被 confirmed 却仍出现在 remaining_issues`);
+    // CONFIRM-ECHO(v0.12.5,下沉为脚本保证):confirmed 的 id 又出现在 remaining_issues 不再判矛盾——
+    // 这是 Codex 在 AGREE 轮的稳定回显习性(实测多轮复现),disposition 为准、由 reduce 当无害 echo 忽略。
+    // 不再要求执行 Claude 手动从 remaining_issues 删除(原 v0.12.4 的 §6 临场归一)。
     if (d.disposition === 'rejected' && !issueIds.has(d.id)) errors.push(`${d.id} 被 rejected 但未在 remaining_issues 给出仍存在的理由`);
   }
   for (const cid of prevCandidates) if (!dispSet.has(cid)) errors.push(`candidate ${cid} 未被裁定(disposition 须覆盖本轮全部 candidate)`);
@@ -158,7 +166,7 @@ export function validateRound(prevState, round) {
   // (b) 在 dispositions+issues 之后的中间态上检查 adopted(修 RS-P2-001:允许同轮 rejected→重采纳、采纳本轮新 issue)。
   const mid = cloneMap(prevState);
   applyDispositions(mid, disp);
-  applyIssues(mid, r.remaining_issues);
+  applyIssues(mid, r.remaining_issues, confirmedSet(r)); // 与 reduce 同步:confirmed-echo 不进中间态(否则 adopted/merge 的 open 前置判定会看到被错误重开的点)
   const adoptedIds = normAdopted(r.adopted).map((a) => a.id);
   const adSeen2 = new Set();
   for (const a of normAdopted(r.adopted)) {
