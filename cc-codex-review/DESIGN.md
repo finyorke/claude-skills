@@ -250,6 +250,9 @@ cc-codex-review/
   scripts/codex-round.mjs           # 单轮 Codex 调用原语(确定性,可单测)
   scripts/review-state.mjs          # 共识账本无状态 reducer/validator/render(P2,§12)
   scripts/review-audit.mjs          # 收敛诚实性独立重放审计:从 raw --out 重建 Codex 字段(①「运动员兼裁判」缓解,v0.13.0,§12)
+  scripts/verdict-shape.mjs         # verdict 结构形状校验(codex-round 产出门 + review-audit 重放门共享,防漂移,v0.13.0)
+  scripts/enforce-resolved-hook.mjs # Stop hook:回合结束认哨兵→独立重审,假 RESOLVED 硬 block(② 硬强制,v0.14.0,§12)
+  hooks/hooks.json                  # 插件自带 Stop hook 注册(装上即全局生效)
   scripts/packet-build.mjs          # 评审包固定段(你的职责 + schema 要求 + 镜头注入)确定性生成(v0.12.5,§12)
   scripts/metrics.mjs               # dogfood 逐轮/跨任务度量(P1,§12)
   schemas/verdict.schema.json        # verdict 结构化输出 schema(strict 模式)
@@ -374,5 +377,14 @@ LLM 循环难做单元测试,采用:
   - **覆盖范围(诚实)**:本期**仅 review.md 接入**审计门;**`do.md` 尚未接入**(其 §4 分歧互审 / §6 复核的收敛泄漏在接入前仍在)——列为紧后续。
   - 新增 `tests/review-audit.test.mjs` 16 例(正常收敛 / 揪假收敛〔raw rejected〕/ 揪隐藏新 issue / CONFIRM-ECHO 容忍 / claudeAgree 严格 / schema 非法 raw〔I1〕/ sha256 必填〔I2〕/ round_index 连续〔I3〕/ CLI 退出码);codex-round 加证据字段断言;全套 **230 绿**。**do.md 接入、盲审 agent 列为后续**。
   - **经 `do` 协作 + 自审 dogfood**(本插件审自己):Codex §6 复核抓出 5 个真问题——I1(blocker:schema 非法 raw 也审过)、I2(major:sha 可选)、I3(major:manifest 完整性未审)、I4(major:DESIGN 谎称 do.md 已接入)、I5(minor:review.md 指令自相矛盾),全部修正(I4 改为诚实标注 do.md 未接入)。
+
+- **② Hook 硬强制收敛诚实性(v0.14.0,经 brainstorm + do 协作 + 自审 dogfood)**:①(review-audit)能独立重放,但仍在 Claude 流程内、可跳过(不审直接文本写 RESOLVED 即逃逸)。② 用 **Claude Code Stop hook** 把它升级为**回合级硬门禁**。spec:`docs/specs/2026-06-29-hook-hard-enforcement-design.md`。
+  - **可行性硬事实(经 claude-code-guide 核实)**:hook **拦不了纯文本**(RESOLVED 非工具调用),只能拦工具调用(PreToolUse deny)或**回合结束**(Stop `decision:block` 强制不让停);**插件可自带 hook**(`hooks/hooks.json`,装上即全局生效);hook stdin 有 `transcript_path` 可读会话。
+  - **设计(brainstorm 定:Stop 兜底 / 插件自带全局 / 认哨兵精确优先 / 方案 B hook 自重审)**:review §6 审计通过后把 audit manifest 落盘临时文件、§7 输出哨兵 `<<CCR-RESOLVED manifest="…">>`;插件自带 Stop hook `enforce-resolved-hook.mjs` 在回合结束读 transcript **最后一条 assistant 消息**找哨兵——无哨兵→放行(全局快路径);有哨兵→`import review-audit` **自己独立重跑重放**(不信任何"已通过"声明),`audited_converged:true` 放行,否则/证据无效→ **exit 2 + `{decision:block}` 强制不让结束回合**。
+  - **fail-open 于基础设施**:hook 自身跑不起来(读不到 transcript / import 失败 / stdin 坏)→ 放行——避免全局 hook 把用户**整个 Claude Code** 卡死;**仅"能跑出审计结论且未通过"才 block**。
+  - **诚实边界(关键,不夸大)**:**显著提高门槛、非 bulletproof**。残余:① 不出哨兵 + 散文写 RESOLVED → 逃逸(主动违规);② 指向旧的通过 manifest 重放(临时文件易失缓解、未绑本次材料指纹);③ manifest 漏末尾轮(①受信边界残余);④ 基础设施 fail-open 可被故意弄坏 hook 环境绕过;⑤ 伪造通过需连 raw Codex 落盘一起骗(难)。**净效果:从"随手假 RESOLVED"变成"必须主动造假(撤哨兵/伪造 hash 匹配产出/弄坏 hook 环境)"**,常见/偷懒路径被回合级硬门挡住。彻底闭合需外部 runner / 真盲审,门槛更高、本期不做。
+  - **范围(诚实)**:② **只 gate review 的 RESOLVED 声明**;`do.md` **不宣布 RESOLVED**(只返回成果 + Codex 复核)故无哨兵可 gate,不强行接入(避免重蹈 v0.13.0 自审 I4 的"虚称已接入")。SubagentStop 暂与 Stop 同脚本可加,MVP 先 Stop。
+  - 新增 `scripts/enforce-resolved-hook.mjs` + `hooks/hooks.json` + `tests/enforce-resolved-hook.test.mjs` 11 例(无哨兵放行 / 哨兵+通过放行 / raw rejected block / manifest 缺失 block / sha 不符 block / **无 kind block** / **代码块内哨兵不误拦** / **散文中间哨兵不误拦** / 旧哨兵不误拦后续回合 / transcript 不可读 fail-open / stdin 坏 fail-open);review.md §6/§7 接入哨兵+manifest 落盘;全套 **241 绿**。
+  - **自审 dogfood**(本插件审自己,Codex 复核)抓出并修:I1(major:全局 Stop hook 把任何哨兵字面量当真→开发讨论粘哨兵会误 block;修为"剥代码块后仅最后一行整行才算" + manifest `kind` 标记)、I2(minor:spec/DESIGN/review.md 范围措辞不一致 + 测试数过期,已对齐)。
 
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。
