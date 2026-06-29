@@ -6,7 +6,7 @@
 
 | 插件 | 作用 | 状态 |
 |---|---|---|
-| **cc-codex-review** | Claude × Codex 收敛互审(`review`)+ 协作执行(`do`)+ 需求提取(`extract-reqs`)+ 决策日志 | 活跃迭代 · v0.12.1 |
+| **cc-codex-review** | Claude × Codex 收敛互审(`review`)+ 协作执行(`do`)+ 需求提取(`extract-reqs`)+ 决策日志 | 活跃迭代 · v0.12.4 |
 | **codex-image-gen** | 用 codex CLI 生成图片(中英文触发) | 稳定 |
 
 ## 安装 / 更新

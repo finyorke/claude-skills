@@ -349,4 +349,13 @@ LLM 循环难做单元测试,采用:
 
 - **决策日志(decisions-log,v0.12.0)**:连续多轮 do/review 时 **Codex 跨轮丢上下文**(独立进程、每轮只见 packet+`--repo`、跨命令零记忆)。把过程定下的**决策/约束(软知识)**落盘到被操作项目的 `.cc-codex-review/decisions.{jsonl,md}`,经 `--repo` 每轮带给 Codex。新增 `scripts/decisions-log.mjs`(纯函数 `nextId`/`applyOps`/`validate`/`renderMarkdown` + CLI `read`/`upsert`/`render`/`validate`,纯函数无 IO、CLI 管文件)。entry 带 `decided/open` 状态、可 `supersedes` 演进;收尾经 Codex 确认「记录无误」再写。**非 Claude 记忆补丁**(Claude 上下文由 Claude Code 原生维护、短期无损;仅长会话 compaction 退化)——是给 **Codex** 的稳定基线。诚实边界:日志仍 Claude 写,靠 Codex 确认 + 用户审 + git diff 取信,收尾写入是 prompt 级软约束。spec/plan:`docs/specs|plans/2026-06-27-decision-log*.md`。
 
+- **kk_notify 真机 dogfood 闭环(v0.12.1→0.12.4,7 轮真实评审 + 多批 `do`,经 herdr 跨 workspace 驱动观测)**:在外部真实项目 kk_notify(博主荐股面板,P1–P5 + 自动AI/Aho 多个 phase)逐 phase 跑 `review`、并以 `do` 收口技术债,**另一 session 读其 transcript 观察插件真实执行**,挖出并修复两类真问题、且当场验证:
+  - **v0.12.1**:`verify-codex-session` 返回 rollout 文件**绝对路径**(`paths` 字段,方案 B),§7 一并列出便于一键打开 Codex 自留对话;CLI 兼收位置参数(承 v0.11.1)。
+  - **v0.12.2(P1 发现)**:决策日志 `upsert` 写回**首次失败**——执行 Claude 按直觉把 entry 写成 `{id,title,severity,rationale}`,漏 `source`/`statement` → 脚本报 12 条 validate 错、只能回去 grep 源码再重试。根因:`review.md`/`do.md` 的 upsert 示例用 `...` 省略号盖住了必填字段。修:示例写全 `source/statement/status/rationale`,注明 `id/ts` 自动分配勿传、severity 用字段勿塞 rationale。**P3/P4/P5 复验:写回均一次成。**
+  - **v0.12.3 → v0.12.4(P2/P3 发现 + 方向修正)**:Codex 在 AGREE 轮**稳定把已 `confirmed` 的 issue 又回显进 `remaining_issues`**(当确认摘要),撞上 `review-state.mjs` 的"confirmed 不得在 remaining_issues"硬校验 → 执行 Claude 每轮被迫手动改写 `remaining_issues:[]`。**v0.12.3 先改 Codex 侧措辞(让它别回显)被 P3 证伪**:① 执行 Claude 组 packet 时会压缩 §4 职责,那句根本没进 packet;② 即便进了 Codex 仍照回显。**v0.12.4 改对边**——`§6 CONFIRM-ECHO`:记账前由 Claude 按 disposition 为准把 confirmed 的 id 从 remaining_issues 删掉,把执行 Claude 本就在临场做的事固化为明文协议步骤,不依赖 Codex 行为。**P5 复验:执行 Claude 援引"按 0.12.4 指引归一删除"、validate-round 一次过。**
+  - **决策日志跨轮价值(实证)**:时区 bug 因每个 phase 各有持久化路径而**三度复现**(`create_record`→`extraction`→`ai_extract`),靠决策日志基线(D1→D13→D18 连续可见)被逐一揪出、最终集中为单一 helper 根治;D3→D14、D8→D15/D19 等"缓办项到期点"也经基线准确识别。**这是决策日志功能不可替代价值的首次真实证明。**
+  - **互审质量旁证(非橡皮图章)**:Codex 主动**升级**严重度(P5 STATUS-UNCHECKED minor→major,Claude 核实前端后接受)、Claude 主动**撤回**自有 issue(P4 COMMENT-GAP,经 Codex 指出属有意范围);`do` 收口 D30/D31 时 round 2 **Codex 文字 AGREE 但 disposition 误标 rejected(自相矛盾)**,执行 Claude **拒绝在矛盾信号上判收敛**、补一轮消歧 → 这是状态机"无隐式确认/disposition 必一致"防假收敛设计的**首次真实触发并奏效**。
+  - **`do` 安全行为(实证)**:Codex 用量上限期间,`do` 正确**停下报告、不擅自单方实现**(符合"Codex 不可用即停"协议),由用户决定降级方案。
+  - **诚实边界**:7 轮均 Claude 单驱动(运动员兼裁判仍在);Codex 落盘可靠故 `verified ✓` 贯穿;样本为单一项目、单一执行者,结论按此打折。
+
 依赖:P0 是 P2 前置;P0/P1 可并行;P3 独立。
