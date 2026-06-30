@@ -43,6 +43,12 @@ function finalLineManifest(text) {
   const m = SENTINEL_LINE.exec(lines[lines.length - 1]);
   return m ? m[1] : null;
 }
+// #1 部分修:规范 §7 成功结论头(很特定的整行,非宽泛匹配"RESOLVED",避免误拦设计讨论/issue 描述)。
+// 命中它却无末行哨兵 = 写了 RESOLVED 结论却没过审计/没出哨兵 → block(堵"忘出哨兵/偷懒不审"的最可能漏法)。
+const CANONICAL_RESOLVED = '收敛结论(状态:RESOLVED)';
+function hasCanonicalResolvedHeader(text) {
+  return stripFences(text).split('\n').some((l) => { const t = l.trim(); return t.startsWith('✅') && t.includes(CANONICAL_RESOLVED); });
+}
 
 function out(obj) { if (obj) process.stdout.write(JSON.stringify(obj) + '\n'); }
 function allow() { out({}); process.exit(0); }
@@ -73,7 +79,10 @@ function detectSentinel(transcriptPath) {
     break;
   }
   const mp = finalLineManifest(text);
-  return mp ? { action: 'gate', manifestPath: mp } : { action: 'allow' };
+  if (mp) return { action: 'gate', manifestPath: mp };
+  // #1:写了规范 RESOLVED 结论头却无哨兵 → block(不能靠"忘出哨兵"绕过审计门)。
+  if (hasCanonicalResolvedHeader(text)) return { action: 'block', reason: '检测到 §7 成功结论头「✅…收敛结论(状态:RESOLVED)」但末行无 CCR-RESOLVED 哨兵:宣布 RESOLVED 必须过 review-audit 并在结论末行输出哨兵。请补审计+哨兵,或把结论改为 UNRESOLVED。' };
+  return { action: 'allow' };
 }
 
 async function main() {

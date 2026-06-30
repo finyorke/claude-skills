@@ -168,6 +168,24 @@ test('修round2漏洞: 单条超大 assistant 记录(>尾窗)末尾带哨兵 →
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('修#1: 写了规范 RESOLVED 结论头却无末行哨兵 → block(堵"忘出哨兵/不审"绕过)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hook-'));
+  try {
+    const tp = writeTranscript(dir, ['✅ 收敛结论(状态:RESOLVED)\n结论内容……\n后续行动若干(末行不是哨兵)']);
+    const r = runHook({ transcript_path: tp });
+    assert.equal(r.code, 2);
+    assert.match(JSON.parse(r.stdout.trim()).reason, /末行无 CCR-RESOLVED 哨兵|结论头/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('修#1: 规范结论头在代码块(```)里(文档/讨论)→ 放行,不误拦', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hook-'));
+  try {
+    const tp = writeTranscript(dir, ['讲解一下 §7 格式:\n```\n✅ 收敛结论(状态:RESOLVED)\n```\n这只是示例,本回合并非评审结论。']);
+    assert.equal(runHook({ transcript_path: tp }).code, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('修round2漏洞: 单条超大 assistant 记录但无哨兵 → 放行(不误伤超大无哨兵消息)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'hook-'));
   try {
